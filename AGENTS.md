@@ -37,8 +37,19 @@ everything protocol-related comes from `a2a-sdk`; this repo is only the minimal 
      share a mailbox and both would process the same message (there is no ack/consume).
    - The principal always comes from the token, so a session can never impersonate
      another machine; sessions of one machine are mutually trusted (same token).
-   - A bare principal is not addressable: nobody could read it, so sending to one is
-     rejected instead of black-holing the message.
+   - **Two mailboxes per agent, both addressable.** `principal` is the agent-wide
+     mailbox, read by *every* session of that agent; `principal/session` is one
+     process's private mailbox. `ListTasks`/`GetTask` for `p/s` therefore read owners
+     `{p/s, p}` (see `HubTaskStore`).
+   - *Why:* store-and-forward means leaving a message for an agent that is **not
+     awake**, whose session name you cannot possibly know. An earlier iteration made a
+     bare principal non-addressable ("nobody could read it") and that broke the hub's
+     whole purpose — sending to `msigl65` returned `REJECTED`, and messages already
+     stored under a bare owner became unreadable. Sessions must isolate *processes*,
+     never make an agent unreachable. Addressing is session-optional; authenticating
+     is not.
+   - Caveat: when the two mailboxes are merged, the response is not paginated
+     (`page_size` still caps the batch); agents poll with `status_timestamp_after`.
    mTLS is a future improvement if more strength is needed.
 4. **SQLite first.** A single file is enough to start; migrate to PostgreSQL if volume grows.
 5. **Per-recipient routing (owner = recipient).** `DatabaseTaskStore` scopes each `Task` to an
@@ -121,6 +132,21 @@ Kubernetes is required.
 - This repo does **not** deploy. Kubernetes manifests and the deploy pipeline live in a
   **separate private infra repo** that consumes this GHCR image. The `publish` job optionally
   notifies that repo (`repository_dispatch`) when `MYINFRA_DISPATCH_TOKEN` is set.
+
+## The hub is shared infrastructure: don't break the contract silently
+
+It has live clients (other agents). Treat the wire contract — required headers,
+`recipient` format, identities, method names — as public API:
+
+- **Land changes through a PR with green CI**, never a direct push to `main`.
+- **Announce breaking changes before deploying them**, and prefer a backwards
+  compatible transition (accept both shapes for a while) over a hard cut-over.
+- **A test must encode the real use case, not just the code path.** The session change
+  shipped at 100% coverage and still broke store-and-forward, because no test covered
+  "A writes to B without knowing B's session; B connects later and receives it".
+  That test now exists (`test_sessions.py`); coverage is a floor, not the goal.
+- Changing storage semantics can strand existing rows. Check what is already in the
+  task store before changing how owners are resolved.
 
 ## Conventions
 

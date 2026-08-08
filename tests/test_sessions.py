@@ -69,11 +69,62 @@ async def test_each_session_has_its_own_mailbox(client):
     assert (await inbox_of(client, TOKEN_A, "three"))["totalSize"] == 0
 
 
-async def test_bare_machine_is_not_addressable(client):
-    # With sessions mandatory nobody could ever read a bare-principal mailbox,
-    # so addressing one is rejected instead of silently black-holing the message.
-    sent = await send_as(client, TOKEN_B, "s1", AGENT_A, "to the machine")
-    assert sent.json()["result"]["task"]["status"]["state"] == "TASK_STATE_REJECTED"
+async def test_store_and_forward_without_knowing_the_session(client):
+    """The core use case: leave a message for an agent that is not awake.
+
+    The sender does not know (and cannot know) the recipient's session name. The
+    recipient connects later, with a session that did not exist at send time, and
+    still gets the message from its agent-wide mailbox.
+    """
+    sent = await send_as(client, TOKEN_B, "sender-sess", AGENT_A, "wake up")
+    assert sent.json()["result"]["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
+
+    # A brand new session of A — created after the message was sent — receives it.
+    inbox = await inbox_of(client, TOKEN_A, "session-that-did-not-exist-yet")
+    assert inbox["totalSize"] == 1
+    assert inbox["tasks"][0]["artifacts"][0]["parts"][0]["text"] == "wake up"
+
+
+async def test_shared_mailbox_is_readable_by_every_session(client):
+    await send_as(client, TOKEN_B, "s", AGENT_A, "for the agent")
+    for session in ("one", "two", "three"):
+        inbox = await inbox_of(client, TOKEN_A, session)
+        assert inbox["totalSize"] == 1, f"session {session} cannot see it"
+
+
+async def test_session_mailbox_stays_private(client):
+    """Addressing a session must NOT leak into the agent-wide mailbox."""
+    await send_as(client, TOKEN_B, "s", f"{AGENT_A}/one", "just for one")
+    assert (await inbox_of(client, TOKEN_A, "one"))["totalSize"] == 1
+    assert (await inbox_of(client, TOKEN_A, "two"))["totalSize"] == 0
+
+
+async def test_session_sees_both_its_own_and_the_shared_mailbox(client):
+    await send_as(client, TOKEN_B, "s", AGENT_A, "to the agent")
+    await send_as(client, TOKEN_B, "s", f"{AGENT_A}/one", "to session one")
+
+    one = await inbox_of(client, TOKEN_A, "one")
+    assert one["totalSize"] == 2
+    texts = {
+        task["artifacts"][0]["parts"][0]["text"] for task in one["tasks"]
+    }
+    assert texts == {"to the agent", "to session one"}
+
+    # A different session sees only the shared one.
+    two = await inbox_of(client, TOKEN_A, "two")
+    assert two["totalSize"] == 1
+
+
+async def test_gettask_reaches_the_shared_mailbox(client):
+    sent = await send_as(client, TOKEN_B, "s", AGENT_A, "fetch from shared")
+    task_id = sent.json()["result"]["task"]["id"]
+
+    body = {"jsonrpc": "2.0", "id": 3, "method": "GetTask", "params": {"id": task_id}}
+    response = await client.post(
+        "/", json=body, headers=session_headers(TOKEN_A, "any-session")
+    )
+    task = response.json()["result"]
+    assert task["artifacts"][0]["parts"][0]["text"] == "fetch from shared"
 
 
 async def test_cross_machine_to_session(client):
@@ -154,8 +205,9 @@ def test_principal_of(identity, expected):
     "identity,known,valid",
     [
         ("a/s1", {"a"}, True),
-        ("a", {"a"}, False),  # a session is mandatory
+        ("a", {"a"}, True),  # agent-wide mailbox: addressable on purpose
         ("b/s1", {"a"}, False),  # unknown principal
+        ("b", {"a"}, False),  # unknown principal
         ("a/bad session", {"a"}, False),
         ("a/", {"a"}, False),  # empty session
         ("/s1", {"a"}, False),  # empty principal

@@ -52,19 +52,26 @@ def principal_of(identity: str) -> str:
 
 
 def is_valid_identity(identity: str, known_principals: set[str] | None) -> bool:
-    """Whether ``identity`` names a reachable mailbox.
+    """Whether ``identity`` names a mailbox a message can be delivered to.
 
-    Identities are always ``principal/session``: the principal must be a known agent
-    (someone holds its token) and the session must be well formed. A bare principal
-    is **not** addressable — nobody could read it, since every client must declare a
-    session to authenticate.
+    Two shapes are addressable, and both are reachable by their owner:
+
+    - ``principal`` — the agent's **shared mailbox**. Every session of that agent
+      reads it, so you can leave a message for an agent whose sessions you do not
+      know (or that is not even running). This is the store-and-forward case.
+    - ``principal/session`` — one specific process's mailbox.
+
+    A session is mandatory to *authenticate*, but never required to *address*
+    someone: sessions isolate processes, they must not make an agent unreachable.
     """
     principal, separator, session = identity.partition(IDENTITY_SEPARATOR)
-    if not principal or not separator or not session:
+    if not principal:
         return False
     if known_principals is not None and principal not in known_principals:
         return False
-    return bool(SESSION_PATTERN.match(session))
+    if separator and not SESSION_PATTERN.match(session):
+        return False
+    return True
 
 
 class TokenRegistry:

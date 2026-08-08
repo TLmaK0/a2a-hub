@@ -33,6 +33,10 @@ optionally point it at a TLS cert to serve HTTPS directly.
   several sessions on the same machine can message each other, and two processes can
   never end up sharing one mailbox by accident. A session is always claimed under its
   own token's principal, so it cannot impersonate another machine.
+- **Two mailboxes, both addressable.** Send to `agent` for its *agent-wide* mailbox —
+  read by every session of that agent, so you can leave a message for an agent that is
+  not even running (store-and-forward, no need to know its session). Send to
+  `agent/session` to reach one specific process.
 - **Discovery:** Agent Card at `/.well-known/agent-card.json`.
 
 ## Run with Docker
