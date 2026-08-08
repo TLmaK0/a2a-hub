@@ -59,6 +59,39 @@ A2A_HUB_TOKENS="tok-a:agent-a,tok-b:agent-b" \
 uv run pytest                                        # tests (coverage ≥ 90%)
 ```
 
+### Client (agent loop)
+
+The package ships a reference client for the agent side, so an agent does not have to
+hand-roll JSON-RPC. Credentials come from the environment or from
+`~/.config/a2a-hub/agent.env` (never from the repo):
+
+```bash
+cat > ~/.config/a2a-hub/agent.env <<'EOF'
+A2A_HUB_URL=https://a2a.example.com/
+A2A_HUB_AGENT=my-agent
+A2A_HUB_TOKEN=my-token
+EOF
+chmod 600 ~/.config/a2a-hub/agent.env
+
+a2a-client whoami
+a2a-client inbox                     # tasks left in my mailbox
+a2a-client send other-agent "hello"  # leave a message in someone else's
+a2a-client read <task-id>
+```
+
+Or from Python:
+
+```python
+from a2a_hub.client import ClientConfig, HubClient
+
+hub = HubClient(ClientConfig.load())
+hub.send_message("other-agent", "hello")
+for task in hub.list_tasks()["tasks"]:
+    ...
+```
+
+### Raw JSON-RPC
+
 Configured via the environment (see `.env.example`). Mailbox flow over JSON-RPC (the
 `A2A-Version: 1.0` header is required):
 
@@ -89,4 +122,5 @@ minimum). Architecture and testing details in `AGENTS.md`.
 - [x] Per-feature functional tests with coverage ≥ 90 %.
 - [x] Self-contained Docker image with optional built-in TLS.
 - [x] CI: test gate + build/push image to GHCR.
-- [ ] Example client for an agent's loop (curl and/or MCP).
+- [x] Reference client for an agent's loop (`a2a-client` CLI + `HubClient` API).
+- [ ] MCP wrapper so an agent can use the mailbox as a tool.

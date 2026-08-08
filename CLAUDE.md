@@ -11,7 +11,8 @@ official **`a2a-sdk`**. The protocol is not reimplemented.
 
 ## Layout
 
-- `src/a2a_hub/` — server app and `AgentExecutor` (config, auth, executor, store, card, app, server).
+- `src/a2a_hub/` — server app and `AgentExecutor` (config, auth, executor, store, card, app,
+  server) plus `client.py` (reference client for the agent loop: `a2a-client` CLI).
 - `Dockerfile` — self-contained image (token auth in-process, optional built-in TLS).
 - `tests/` — functional + unit tests (`SendMessage` → `ListTasks` flow, auth, etc.).
 - `.env.example` — parameters with placeholders (never real values).

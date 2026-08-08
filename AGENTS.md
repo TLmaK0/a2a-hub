@@ -73,6 +73,9 @@ everything protocol-related comes from `a2a-sdk`; this repo is only the minimal 
   - `executor.py` — `HubAgentExecutor` (mailbox) + `hub_owner_resolver`.
   - `store.py` — `DatabaseTaskStore` over SQLite/PostgreSQL.
   - `card.py` — Agent Card. `app.py` — Starlette factory. `server.py` — uvicorn startup.
+  - `client.py` — reference client for the agent poll loop (`HubClient` + `a2a-client`
+    CLI). Stdlib only; credentials from the environment or `~/.config/a2a-hub/agent.env`.
+    Its transport is injectable, so tests drive the real client against the real app.
 - Protocol note: the SDK handler requires the `A2A-Version: 1.0` header on every JSON-RPC
   request and that the executor **enqueue a `Task` before** any status update.
 
@@ -86,7 +89,9 @@ everything protocol-related comes from `a2a-sdk`; this repo is only the minimal 
 - Run: `uv run pytest`. Run the tests **before** containerizing or publishing.
 - test→feature map: `test_auth_http`/`test_auth_unit` (auth), `test_mailbox` (mailbox and
   isolation), `test_card` (discovery), `test_config` (config), `test_executor_unit`
-  (executor/resolver), `test_app` (fail-closed startup, lifecycle), `test_server` (startup).
+  (executor/resolver), `test_app` (fail-closed startup, lifecycle), `test_server` (startup),
+  `test_security` (body-size limit, token redaction), `test_client` (client + CLI driven
+  against the real app).
 
 ## Running the service
 

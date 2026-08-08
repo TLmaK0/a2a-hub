@@ -1,0 +1,235 @@
+"""Minimal A2A client for an agent's poll loop against the hub.
+
+Agents are loops that *poll*: they leave messages in someone's mailbox with
+``SendMessage`` and pick up their own with ``ListTasks``/``GetTask``. This module is
+the reference client for that loop — no extra dependencies, stdlib only.
+
+Configuration comes from the environment, or from an env-style file (default
+``~/.config/a2a-hub/agent.env``) so a token never has to live in the repo::
+
+    A2A_HUB_URL=https://a2a.example.com/
+    A2A_HUB_AGENT=my-agent
+    A2A_HUB_TOKEN=<my bearer token>
+
+CLI::
+
+    a2a-client whoami
+    a2a-client inbox [--json]
+    a2a-client read <task-id>
+    a2a-client send <recipient> <text...>
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import urllib.request
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+#: Default location of the agent credentials file.
+DEFAULT_CONFIG_PATH = Path.home() / ".config" / "a2a-hub" / "agent.env"
+
+#: Protocol version required by the hub on every JSON-RPC request.
+A2A_VERSION = "1.0"
+
+#: Callable that performs the HTTP POST and returns the decoded JSON-RPC response.
+Transport = Callable[[str, bytes, dict[str, str]], dict[str, Any]]
+
+
+class ClientError(RuntimeError):
+    """Configuration or hub-side error surfaced to the caller."""
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    """Read a ``KEY=value`` file, ignoring blanks and ``#`` comments."""
+    values: dict[str, str] = {}
+    try:
+        content = path.read_text()
+    except OSError:
+        return values
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip()
+    return values
+
+
+@dataclass(frozen=True)
+class ClientConfig:
+    """Where the hub is, who I am, and the token that proves it.
+
+    Attributes:
+        url: base URL of the hub's JSON-RPC endpoint.
+        agent: this agent's name (informational; identity comes from the token).
+        token: bearer token for this agent.
+    """
+
+    url: str
+    agent: str
+    token: str
+
+    @classmethod
+    def load(
+        cls,
+        environ: Mapping[str, str] | None = None,
+        config_path: Path | None = None,
+    ) -> ClientConfig:
+        """Build the config from the environment, falling back to the config file.
+
+        Environment variables win, so a container can override the file.
+        """
+        env = dict(os.environ if environ is None else environ)
+        path = DEFAULT_CONFIG_PATH if config_path is None else config_path
+        merged = {**_parse_env_file(path), **{k: v for k, v in env.items() if v}}
+
+        missing = [
+            key
+            for key in ("A2A_HUB_URL", "A2A_HUB_AGENT", "A2A_HUB_TOKEN")
+            if not merged.get(key)
+        ]
+        if missing:
+            raise ClientError(
+                f"missing {', '.join(missing)} (set them in the environment or {path})"
+            )
+        return cls(
+            url=merged["A2A_HUB_URL"],
+            agent=merged["A2A_HUB_AGENT"],
+            token=merged["A2A_HUB_TOKEN"],
+        )
+
+
+def _urllib_transport(url: str, body: bytes, headers: dict[str, str]) -> dict[str, Any]:
+    """Default transport: stdlib POST returning the decoded JSON body."""
+    request = urllib.request.Request(url, data=body, headers=headers)  # noqa: S310
+    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
+        return json.load(response)
+
+
+class HubClient:
+    """Thin JSON-RPC client for the hub's mailbox operations."""
+
+    def __init__(
+        self, config: ClientConfig, transport: Transport | None = None
+    ) -> None:
+        """Args:
+        config: hub URL, agent name and bearer token.
+        transport: override the HTTP layer (used by tests).
+        """
+        self.config = config
+        self._transport = transport or _urllib_transport
+
+    def _rpc(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Send one JSON-RPC call and return its ``result``."""
+        body = json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        ).encode()
+        headers = {
+            "Content-Type": "application/json",
+            "A2A-Version": A2A_VERSION,
+            "Authorization": f"Bearer {self.config.token}",
+        }
+        payload = self._transport(self.config.url, body, headers)
+        if "error" in payload:
+            error = payload["error"]
+            message = (
+                error.get("message", error) if isinstance(error, dict) else error
+            )
+            raise ClientError(f"hub error: {message}")
+        return payload["result"]
+
+    def list_tasks(self, include_artifacts: bool = True) -> dict[str, Any]:
+        """List the tasks waiting in *my* mailbox."""
+        return self._rpc("ListTasks", {"includeArtifacts": include_artifacts})
+
+    def get_task(self, task_id: str) -> dict[str, Any]:
+        """Fetch a single task from my mailbox by id."""
+        return self._rpc("GetTask", {"id": task_id})
+
+    def send_message(self, recipient: str, text: str) -> dict[str, Any]:
+        """Leave a text message in ``recipient``'s mailbox."""
+        return self._rpc(
+            "SendMessage",
+            {
+                "message": {
+                    "messageId": os.urandom(8).hex(),
+                    "role": "ROLE_USER",
+                    "parts": [{"text": text}],
+                    "metadata": {"recipient": recipient},
+                }
+            },
+        )
+
+
+def format_task(task: dict[str, Any]) -> str:
+    """One-line summary of a task plus the messages it carries."""
+    status = task.get("status", {})
+    state = status.get("state", "?").replace("TASK_STATE_", "")
+    when = status.get("timestamp", "")[:19].replace("T", " ")
+    lines = [f"[{task.get('id', '?')[:8]}] {state:<9} {when}".rstrip()]
+    for artifact in task.get("artifacts", []):
+        sender = artifact.get("metadata", {}).get("sender", "?")
+        text = " ".join(
+            part.get("text", "") for part in artifact.get("parts", [])
+        ).strip()
+        lines.append(f"    from {sender}: {text}")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
+    """CLI entry point. Returns the process exit code."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+
+    try:
+        hub = client or HubClient(ClientConfig.load())
+        command = args[0]
+
+        if command == "whoami":
+            # Never print the token.
+            print(f"agent : {hub.config.agent}")
+            print(f"hub   : {hub.config.url}")
+
+        elif command == "inbox":
+            result = hub.list_tasks()
+            if "--json" in args:
+                print(json.dumps(result, indent=2))
+            else:
+                print(
+                    f"mailbox of {hub.config.agent}: "
+                    f"{result.get('totalSize', 0)} task(s)"
+                )
+                for task in result.get("tasks", []):
+                    print(format_task(task))
+
+        elif command == "read":
+            if len(args) < 2:
+                raise ClientError("usage: a2a-client read <task-id>")
+            print(json.dumps(hub.get_task(args[1]), indent=2))
+
+        elif command == "send":
+            if len(args) < 3:
+                raise ClientError("usage: a2a-client send <recipient> <text...>")
+            recipient = args[1]
+            result = hub.send_message(recipient, " ".join(args[2:]))
+            task = result.get("task", {})
+            state = task.get("status", {}).get("state", "?").replace(
+                "TASK_STATE_", ""
+            )
+            print(f"-> {recipient}: {state} (task {task.get('id', '?')[:8]})")
+
+        else:
+            raise ClientError(f"unknown command: {command}")
+
+    except ClientError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    return 0
