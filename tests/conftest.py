@@ -17,12 +17,17 @@ from a2a_hub.app import create_app
 from a2a_hub.config import Settings
 
 
-# Two test agents: token -> name.
+# Two test agents (principals): token -> name.
 TOKENS = {"tok-a": "agent-a", "tok-b": "agent-b"}
 TOKEN_A = "tok-a"
 TOKEN_B = "tok-b"
 AGENT_A = "agent-a"
 AGENT_B = "agent-b"
+
+# A session is mandatory, so identities are always `principal/session`.
+SESSION = "s1"
+IDENT_A = f"{AGENT_A}/{SESSION}"
+IDENT_B = f"{AGENT_B}/{SESSION}"
 
 
 @pytest.fixture
@@ -58,11 +63,13 @@ async def client(app) -> AsyncIterator[httpx.AsyncClient]:
 A2A_VERSION = "1.0"
 
 
-def auth(token: str | None) -> dict[str, str]:
-    """Headers: A2A version + Authorization bearer (if a token is given)."""
+def auth(token: str | None, session: str | None = SESSION) -> dict[str, str]:
+    """Headers: A2A version + bearer token + the (mandatory) session."""
     headers = {"A2A-Version": A2A_VERSION}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    if session is not None:
+        headers["A2A-Session"] = session
     return headers
 
 

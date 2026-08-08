@@ -29,7 +29,16 @@ everything protocol-related comes from `a2a-sdk`; this repo is only the minimal 
 2. **Official `a2a-sdk`, not `a2a-server`.** The `Agent-2-Agent/a2a-server` repo is dead and
    does not implement the protocol. `a2a-sdk` is alive (Linux Foundation, ~2k★) and ships an
    HTTP server + SQL persistence.
-3. **Bearer token auth per agent.** One token = one agent (for per-identity rate-limit/audit).
+3. **Bearer token auth per agent, identity `principal/session`.** One token = one machine
+   (the *principal*, for per-identity rate-limit/audit). On top of that every client
+   **must** send the `A2A-Session` header: the identity becomes `principal/session` and
+   each process gets its own mailbox.
+   - *Why mandatory:* without it, two processes holding the same token would silently
+     share a mailbox and both would process the same message (there is no ack/consume).
+   - The principal always comes from the token, so a session can never impersonate
+     another machine; sessions of one machine are mutually trusted (same token).
+   - A bare principal is not addressable: nobody could read it, so sending to one is
+     rejected instead of black-holing the message.
    mTLS is a future improvement if more strength is needed.
 4. **SQLite first.** A single file is enough to start; migrate to PostgreSQL if volume grows.
 5. **Per-recipient routing (owner = recipient).** `DatabaseTaskStore` scopes each `Task` to an
@@ -91,7 +100,7 @@ everything protocol-related comes from `a2a-sdk`; this repo is only the minimal 
   isolation), `test_card` (discovery), `test_config` (config), `test_executor_unit`
   (executor/resolver), `test_app` (fail-closed startup, lifecycle), `test_server` (startup),
   `test_security` (body-size limit, token redaction), `test_client` (client + CLI driven
-  against the real app).
+  against the real app), `test_sessions` (per-session identities, mandatory session).
 
 ## Running the service
 

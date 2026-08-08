@@ -27,7 +27,12 @@ optionally point it at a TLS cert to serve HTTPS directly.
   on its tick to pick up what was left for it. This uses the standard A2A Task model — not a
   home-grown protocol.
 - **Persistence:** SQLite to start (a single file); PostgreSQL if it grows.
-- **Auth:** bearer token per agent (one token = one agent), declared in the Agent Card.
+- **Auth:** bearer token per machine/agent (the *principal*), declared in the Agent Card.
+- **Identity = `principal/session`.** Every client must also declare a session
+  (`A2A-Session` header, **mandatory**), which gives each process its own mailbox. So
+  several sessions on the same machine can message each other, and two processes can
+  never end up sharing one mailbox by accident. A session is always claimed under its
+  own token's principal, so it cannot impersonate another machine.
 - **Discovery:** Agent Card at `/.well-known/agent-card.json`.
 
 ## Run with Docker
@@ -68,15 +73,20 @@ hand-roll JSON-RPC. Credentials come from the environment or from
 ```bash
 cat > ~/.config/a2a-hub/agent.env <<'EOF'
 A2A_HUB_URL=https://a2a.example.com/
-A2A_HUB_AGENT=my-agent
+A2A_HUB_AGENT=my-machine
 A2A_HUB_TOKEN=my-token
+A2A_HUB_SESSION=my-session     # required: this process's own mailbox
 EOF
 chmod 600 ~/.config/a2a-hub/agent.env
 
-a2a-client whoami
-a2a-client inbox                     # tasks left in my mailbox
-a2a-client send other-agent "hello"  # leave a message in someone else's
+a2a-client whoami                               # my-machine/my-session
+a2a-client inbox                                # tasks left in my mailbox
+a2a-client send other-machine/their-session hi  # leave a message for someone
 a2a-client read <task-id>
+
+# Another session on this same machine (own mailbox, can talk to the first one):
+a2a-client --session other-session inbox
+a2a-client --session other-session send my-machine/my-session "hi sibling"
 ```
 
 Or from Python:

@@ -27,6 +27,8 @@ from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types.a2a_pb2 import Part, Role, Task, TaskState, TaskStatus
 
+from a2a_hub.auth import is_valid_identity
+
 
 #: Metadata key (on the message or the request) holding the recipient agent.
 RECIPIENT_KEY = "recipient"
@@ -74,8 +76,9 @@ class HubAgentExecutor(AgentExecutor):
 
     def __init__(self, known_agents: set[str] | None = None) -> None:
         """Args:
-        known_agents: if set, recipients outside the set are rejected (avoids
-            messages to non-existent mailboxes). ``None`` = no validation.
+        known_agents: if set, the **principal** of a recipient must be one of these
+            (avoids messages to non-existent mailboxes). Recipients may address a
+            session with ``principal/session``. ``None`` = no validation.
         """
         self._known_agents = known_agents
 
@@ -105,7 +108,7 @@ class HubAgentExecutor(AgentExecutor):
             )
             return
 
-        if self._known_agents is not None and recipient not in self._known_agents:
+        if not is_valid_identity(recipient, self._known_agents):
             await updater.reject(
                 message=self._notice(
                     updater, f"unknown recipient: {recipient!r}"

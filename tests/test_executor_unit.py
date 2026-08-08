@@ -88,7 +88,7 @@ def test_struct_to_dict_none():
 
 
 def test_extract_recipient_from_message():
-    assert _extract_recipient(_ctx(_msg("agent-b"))) == "agent-b"
+    assert _extract_recipient(_ctx(_msg("agent-b/s1"))) == "agent-b/s1"
 
 
 def test_extract_recipient_missing():
@@ -117,13 +117,13 @@ async def test_execute_without_message_rejects():
 
 async def test_execute_delivery_marks_completed():
     q = FakeQueue()
-    ctx = _ctx(_msg("agent-b"))
+    ctx = _ctx(_msg("agent-b/s1"))
     await HubAgentExecutor(known_agents={"agent-b"}).execute(ctx, q)
     assert TaskState.TASK_STATE_COMPLETED in q.states()
-    assert ctx.call_context.state["owner_override"] == "agent-b"
+    assert ctx.call_context.state["owner_override"] == "agent-b/s1"
 
 
 async def test_cancel_emits_canceled():
     q = FakeQueue()
-    await HubAgentExecutor().cancel(_ctx(_msg("agent-b")), q)
+    await HubAgentExecutor().cancel(_ctx(_msg("agent-b/s1")), q)
     assert TaskState.TASK_STATE_CANCELED in q.states()

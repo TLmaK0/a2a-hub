@@ -10,6 +10,11 @@ Configuration comes from the environment, or from an env-style file (default
     A2A_HUB_URL=https://a2a.example.com/
     A2A_HUB_AGENT=my-agent
     A2A_HUB_TOKEN=<my bearer token>
+    A2A_HUB_SESSION=<optional session name>
+
+Sessions: the token identifies the machine (principal). Setting a session gives this
+process its own mailbox, ``principal/session``, so several sessions on the same
+machine can message each other. Address them as ``machine/session``.
 
 CLI::
 
@@ -17,6 +22,7 @@ CLI::
     a2a-client inbox [--json]
     a2a-client read <task-id>
     a2a-client send <recipient> <text...>
+    a2a-client [--session NAME] ...      # overrides A2A_HUB_SESSION
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ import os
 import sys
 import urllib.request
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -67,13 +73,20 @@ class ClientConfig:
 
     Attributes:
         url: base URL of the hub's JSON-RPC endpoint.
-        agent: this agent's name (informational; identity comes from the token).
+        agent: this agent's (principal) name; identity comes from the token.
         token: bearer token for this agent.
+        session: per-session name; required, gives this process its own mailbox.
     """
 
     url: str
     agent: str
     token: str
+    session: str
+
+    @property
+    def identity(self) -> str:
+        """Full mailbox identity: ``agent/session``."""
+        return f"{self.agent}/{self.session}"
 
     @classmethod
     def load(
@@ -91,7 +104,12 @@ class ClientConfig:
 
         missing = [
             key
-            for key in ("A2A_HUB_URL", "A2A_HUB_AGENT", "A2A_HUB_TOKEN")
+            for key in (
+                "A2A_HUB_URL",
+                "A2A_HUB_AGENT",
+                "A2A_HUB_TOKEN",
+                "A2A_HUB_SESSION",
+            )
             if not merged.get(key)
         ]
         if missing:
@@ -102,6 +120,7 @@ class ClientConfig:
             url=merged["A2A_HUB_URL"],
             agent=merged["A2A_HUB_AGENT"],
             token=merged["A2A_HUB_TOKEN"],
+            session=merged["A2A_HUB_SESSION"],
         )
 
 
@@ -134,6 +153,8 @@ class HubClient:
             "Content-Type": "application/json",
             "A2A-Version": A2A_VERSION,
             "Authorization": f"Bearer {self.config.token}",
+            # Claims this session's own mailbox under our token's principal.
+            "A2A-Session": self.config.session,
         }
         payload = self._transport(self.config.url, body, headers)
         if "error" in payload:
@@ -185,18 +206,35 @@ def format_task(task: dict[str, Any]) -> str:
 def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     args = list(sys.argv[1:] if argv is None else argv)
+
+    # `--session NAME` may appear anywhere; it overrides A2A_HUB_SESSION.
+    session_override: str | None = None
+    if "--session" in args:
+        index = args.index("--session")
+        if index + 1 >= len(args):
+            print("usage: a2a-client --session <name> ...", file=sys.stderr)
+            return 1
+        session_override = args[index + 1]
+        del args[index : index + 2]
+
     if not args or args[0] in ("-h", "--help"):
         print(__doc__)
         return 0
 
     try:
-        hub = client or HubClient(ClientConfig.load())
+        if client is None:
+            config = ClientConfig.load()
+            if session_override:
+                config = replace(config, session=session_override)
+            hub = HubClient(config)
+        else:
+            hub = client
         command = args[0]
 
         if command == "whoami":
             # Never print the token.
-            print(f"agent : {hub.config.agent}")
-            print(f"hub   : {hub.config.url}")
+            print(f"identity : {hub.config.identity}")
+            print(f"hub      : {hub.config.url}")
 
         elif command == "inbox":
             result = hub.list_tasks()
@@ -204,7 +242,7 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
                 print(json.dumps(result, indent=2))
             else:
                 print(
-                    f"mailbox of {hub.config.agent}: "
+                    f"mailbox of {hub.config.identity}: "
                     f"{result.get('totalSize', 0)} task(s)"
                 )
                 for task in result.get("tasks", []):

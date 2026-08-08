@@ -13,6 +13,7 @@ Hard rules (see AGENTS.md § Security):
 from __future__ import annotations
 
 import hmac
+import re
 
 from starlette.authentication import AuthCredentials, SimpleUser
 from starlette.requests import HTTPConnection, Request
@@ -32,6 +33,38 @@ PUBLIC_PATHS: frozenset[str] = frozenset({AGENT_CARD_WELL_KNOWN_PATH, HEALTH_PAT
 # Request headers that must never end up stored in the call context (and thus never
 # in any context/state dump or log).
 SENSITIVE_HEADERS: frozenset[str] = frozenset({"authorization", "cookie"})
+
+#: Header a client uses to claim its per-session identity under its own token.
+#: **Mandatory**: every authenticated request must declare a session, so two
+#: processes can never end up sharing one mailbox by accident.
+SESSION_HEADER = "a2a-session"
+
+#: Separator between the principal (from the token) and the session name.
+IDENTITY_SEPARATOR = "/"
+
+#: Accepted session names: keeps identities readable and safe as storage keys.
+SESSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def principal_of(identity: str) -> str:
+    """Return the token-backed principal of an identity (``machine/session``)."""
+    return identity.split(IDENTITY_SEPARATOR, 1)[0]
+
+
+def is_valid_identity(identity: str, known_principals: set[str] | None) -> bool:
+    """Whether ``identity`` names a reachable mailbox.
+
+    Identities are always ``principal/session``: the principal must be a known agent
+    (someone holds its token) and the session must be well formed. A bare principal
+    is **not** addressable — nobody could read it, since every client must declare a
+    session to authenticate.
+    """
+    principal, separator, session = identity.partition(IDENTITY_SEPARATOR)
+    if not principal or not separator or not session:
+        return False
+    if known_principals is not None and principal not in known_principals:
+        return False
+    return bool(SESSION_PATTERN.match(session))
 
 
 class TokenRegistry:
@@ -74,8 +107,14 @@ class BearerAuthMiddleware:
     """ASGI middleware that requires a bearer token except on public paths.
 
     On success it injects ``scope['user']`` (a ``SimpleUser`` with the agent
-    name) and ``scope['auth']``, which the SDK's ``DefaultServerCallContextBuilder``
-    picks up to build the ``ServerCallContext`` with the agent identity.
+    identity) and ``scope['auth']``, which the SDK's
+    ``DefaultServerCallContextBuilder`` picks up to build the ``ServerCallContext``.
+
+    Per-session identities: the token identifies the **principal** (one token = one
+    machine/agent). A client may claim a sub-identity for its session with the
+    ``A2A-Session`` header, yielding ``principal/session`` — its own mailbox. A
+    session is always claimed **under its own token's principal**, so sessions of one
+    machine can talk to each other while staying isolated from every other machine.
     """
 
     def __init__(self, app: ASGIApp, registry: TokenRegistry) -> None:
@@ -104,7 +143,28 @@ class BearerAuthMiddleware:
             await response(scope, receive, send)
             return
 
-        scope["user"] = SimpleUser(agent)
+        # A session is mandatory: it is what keeps two processes holding the same
+        # token from sharing one mailbox.
+        session = (conn.headers.get(SESSION_HEADER) or "").strip()
+        if not SESSION_PATTERN.match(session):
+            response = JSONResponse(
+                {
+                    "error": "invalid_session",
+                    "detail": (
+                        f"the {SESSION_HEADER} header is required and must match "
+                        f"{SESSION_PATTERN.pattern}"
+                    ),
+                },
+                status_code=400,
+            )
+            await response(scope, receive, send)
+            return
+
+        # The session always hangs off this token's principal: a client cannot claim
+        # an identity belonging to another machine.
+        identity = f"{agent}{IDENTITY_SEPARATOR}{session}"
+
+        scope["user"] = SimpleUser(identity)
         scope["auth"] = AuthCredentials(["authenticated"])
         await self.app(scope, receive, send)
 

@@ -7,8 +7,8 @@ guarantee per-agent isolation.
 from __future__ import annotations
 
 from conftest import (
-    AGENT_A,
-    AGENT_B,
+    IDENT_A,
+    IDENT_B,
     TOKEN_A,
     TOKEN_B,
     rpc,
@@ -25,18 +25,18 @@ async def _send(client, sender_token, recipient, text="hello"):
 
 
 async def test_delivery_to_recipient(client):
-    body = await _send(client, TOKEN_A, AGENT_B, "hello B")
+    body = await _send(client, TOKEN_A, IDENT_B, "hello B")
     task = body["result"]["task"]
     assert task["status"]["state"] == "TASK_STATE_COMPLETED"
     # The artifact carries the content and who sent it.
     art = task["artifacts"][0]
     assert art["parts"][0]["text"] == "hello B"
-    assert art["metadata"]["sender"] == AGENT_A
-    assert art["metadata"]["recipient"] == AGENT_B
+    assert art["metadata"]["sender"] == IDENT_A
+    assert art["metadata"]["recipient"] == IDENT_B
 
 
 async def test_recipient_sees_message_sender_does_not(client):
-    await _send(client, TOKEN_A, AGENT_B, "for B")
+    await _send(client, TOKEN_A, IDENT_B, "for B")
 
     # B sees a task in its mailbox.
     lb = await rpc(client, "ListTasks", {}, token=TOKEN_B)
@@ -48,7 +48,7 @@ async def test_recipient_sees_message_sender_does_not(client):
 
 
 async def test_gettask_by_owner_returns_content(client):
-    body = await _send(client, TOKEN_A, AGENT_B, "secret")
+    body = await _send(client, TOKEN_A, IDENT_B, "secret")
     tid = body["result"]["task"]["id"]
 
     got = await rpc(client, "GetTask", {"id": tid}, token=TOKEN_B)
@@ -58,7 +58,7 @@ async def test_gettask_by_owner_returns_content(client):
 
 
 async def test_gettask_by_non_owner_not_found(client):
-    body = await _send(client, TOKEN_A, AGENT_B)
+    body = await _send(client, TOKEN_A, IDENT_B)
     tid = body["result"]["task"]["id"]
 
     # Sender A cannot read B's mailbox.
@@ -67,7 +67,7 @@ async def test_gettask_by_non_owner_not_found(client):
 
 
 async def test_list_with_artifacts(client):
-    await _send(client, TOKEN_A, AGENT_B, "with attachment")
+    await _send(client, TOKEN_A, IDENT_B, "with attachment")
     lb = await rpc(client, "ListTasks", {"includeArtifacts": True}, token=TOKEN_B)
     art = lb.json()["result"]["tasks"][0]["artifacts"][0]
     assert art["parts"][0]["text"] == "with attachment"
@@ -99,21 +99,21 @@ async def test_unknown_recipient_rejected(client):
 
 async def test_self_message(client):
     # An agent can leave a note to itself.
-    await _send(client, TOKEN_A, AGENT_A, "note to self")
+    await _send(client, TOKEN_A, IDENT_A, "note to self")
     la = await rpc(client, "ListTasks", {}, token=TOKEN_A)
     assert la.json()["result"]["totalSize"] == 1
 
 
 async def test_multiple_messages_accumulate(client):
     for i in range(3):
-        await _send(client, TOKEN_A, AGENT_B, f"m{i}")
+        await _send(client, TOKEN_A, IDENT_B, f"m{i}")
     lb = await rpc(client, "ListTasks", {}, token=TOKEN_B)
     assert lb.json()["result"]["totalSize"] == 3
 
 
 async def test_bidirectional_isolation(client):
-    await _send(client, TOKEN_A, AGENT_B, "A->B")
-    await _send(client, TOKEN_B, AGENT_A, "B->A")
+    await _send(client, TOKEN_A, IDENT_B, "A->B")
+    await _send(client, TOKEN_B, IDENT_A, "B->A")
 
     la = await rpc(client, "ListTasks", {}, token=TOKEN_A)
     lb = await rpc(client, "ListTasks", {}, token=TOKEN_B)
@@ -122,7 +122,7 @@ async def test_bidirectional_isolation(client):
 
 
 async def test_cancel_completed_task_not_reopened(client):
-    body = await _send(client, TOKEN_A, AGENT_B)
+    body = await _send(client, TOKEN_A, IDENT_B)
     tid = body["result"]["task"]["id"]
     # Delivery is immediate: the task is already COMPLETED. Cancel leaves it as is.
     r = await rpc(client, "CancelTask", {"id": tid}, token=TOKEN_B)
