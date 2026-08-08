@@ -54,6 +54,12 @@ everything protocol-related comes from `a2a-sdk`; this repo is only the minimal 
   (`create_app` raises on empty tokens). The hub never comes up without auth.
 - Rotation: tokens must be rotatable by changing the config/secret and restarting, without
   rebuilding the image.
+- **Hub-level mitigations live in the hub** (so a Docker-only deploy is protected too), not
+  in the proxy: request bodies are capped (`A2A_HUB_MAX_BODY_BYTES`, default 1 MiB → 413),
+  and the bearer token is stripped from the call context (`RedactingContextBuilder`) so it
+  cannot leak via a state/context dump. Only pure transport concerns (TLS minimum version,
+  HTTP→HTTPS redirect when a proxy terminates TLS) belong to the infra layer.
+- Never run with root `DEBUG` logging in production (default `info` is fine).
 
 ## Development
 

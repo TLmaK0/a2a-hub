@@ -15,10 +15,12 @@ from __future__ import annotations
 import hmac
 
 from starlette.authentication import AuthCredentials, SimpleUser
-from starlette.requests import HTTPConnection
+from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from a2a.server.context import ServerCallContext
+from a2a.server.routes import DefaultServerCallContextBuilder
 from a2a.utils import AGENT_CARD_WELL_KNOWN_PATH
 
 
@@ -26,6 +28,10 @@ HEALTH_PATH = "/healthz"
 
 # Public paths: A2A discovery and the healthcheck. Nothing else is exposed.
 PUBLIC_PATHS: frozenset[str] = frozenset({AGENT_CARD_WELL_KNOWN_PATH, HEALTH_PATH})
+
+# Request headers that must never end up stored in the call context (and thus never
+# in any context/state dump or log).
+SENSITIVE_HEADERS: frozenset[str] = frozenset({"authorization", "cookie"})
 
 
 class TokenRegistry:
@@ -100,4 +106,55 @@ class BearerAuthMiddleware:
 
         scope["user"] = SimpleUser(agent)
         scope["auth"] = AuthCredentials(["authenticated"])
+        await self.app(scope, receive, send)
+
+
+class RedactingContextBuilder(DefaultServerCallContextBuilder):
+    """Context builder that keeps the bearer token out of ``ServerCallContext``.
+
+    The SDK default copies **all** request headers (including ``Authorization``)
+    into ``context.state['headers']``. We drop the sensitive ones so a token can
+    never leak through a context/state dump (e.g. if DEBUG logging is enabled).
+    """
+
+    def build(self, request: Request) -> ServerCallContext:
+        context = super().build(request)
+        headers = context.state.get("headers")
+        if isinstance(headers, dict):
+            for name in list(headers):
+                if name.lower() in SENSITIVE_HEADERS:
+                    headers.pop(name, None)
+        return context
+
+
+class MaxBodySizeMiddleware:
+    """Reject requests whose declared body exceeds ``max_bytes`` with ``413``.
+
+    Application-level DoS guard so it protects every deployment (Docker-only too),
+    not just those behind a proxy. ``max_bytes <= 0`` disables the check.
+    """
+
+    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and self.max_bytes > 0:
+            for name, value in scope.get("headers", []):
+                if name == b"content-length":
+                    try:
+                        too_large = int(value) > self.max_bytes
+                    except ValueError:
+                        too_large = False
+                    if too_large:
+                        response = JSONResponse(
+                            {
+                                "error": "payload_too_large",
+                                "detail": f"request body exceeds {self.max_bytes} bytes",
+                            },
+                            status_code=413,
+                        )
+                        await response(scope, receive, send)
+                        return
+                    break
         await self.app(scope, receive, send)

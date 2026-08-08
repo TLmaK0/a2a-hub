@@ -53,6 +53,8 @@ class Settings:
         port: server listen port.
         tls_certfile: optional PEM cert path to serve HTTPS directly (self-contained).
         tls_keyfile: optional PEM private key path paired with ``tls_certfile``.
+        max_body_bytes: reject requests whose body exceeds this size (413). DoS guard;
+            ``0`` disables the check. Applies to every deployment (Docker-only too).
     """
 
     tokens: dict[str, str] = field(default_factory=dict)
@@ -63,6 +65,7 @@ class Settings:
     port: int = 8000
     tls_certfile: str | None = None
     tls_keyfile: str | None = None
+    max_body_bytes: int = 1_048_576  # 1 MiB
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> Settings:
@@ -78,6 +81,7 @@ class Settings:
             A2A_HUB_PORT        listen port
             A2A_HUB_TLS_CERTFILE  PEM cert path to serve HTTPS directly (optional)
             A2A_HUB_TLS_KEYFILE   PEM key path paired with the cert (optional)
+            A2A_HUB_MAX_BODY_BYTES  max request body size in bytes (0 disables)
         """
         env = environ if environ is not None else dict(os.environ)
 
@@ -97,4 +101,5 @@ class Settings:
             port=int(env.get("A2A_HUB_PORT", "8000")),
             tls_certfile=env.get("A2A_HUB_TLS_CERTFILE") or None,
             tls_keyfile=env.get("A2A_HUB_TLS_KEYFILE") or None,
+            max_body_bytes=int(env.get("A2A_HUB_MAX_BODY_BYTES", "1048576")),
         )

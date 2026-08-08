@@ -17,7 +17,13 @@ from starlette.routing import Route
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 
-from a2a_hub.auth import HEALTH_PATH, BearerAuthMiddleware, TokenRegistry
+from a2a_hub.auth import (
+    HEALTH_PATH,
+    BearerAuthMiddleware,
+    MaxBodySizeMiddleware,
+    RedactingContextBuilder,
+    TokenRegistry,
+)
 from a2a_hub.card import build_agent_card
 from a2a_hub.config import Settings
 from a2a_hub.executor import HubAgentExecutor
@@ -59,7 +65,10 @@ def create_app(settings: Settings) -> Starlette:
     routes: list[Route] = [
         Route(HEALTH_PATH, _healthz, methods=["GET"]),
         *create_agent_card_routes(agent_card),
-        *create_jsonrpc_routes(handler, settings.rpc_url),
+        # RedactingContextBuilder keeps the bearer token out of the call context.
+        *create_jsonrpc_routes(
+            handler, settings.rpc_url, context_builder=RedactingContextBuilder()
+        ),
     ]
 
     @asynccontextmanager
@@ -72,7 +81,11 @@ def create_app(settings: Settings) -> Starlette:
 
     app = Starlette(
         routes=routes,
-        middleware=[Middleware(BearerAuthMiddleware, registry=registry)],
+        middleware=[
+            # Outermost: reject oversized bodies before anything reads them.
+            Middleware(MaxBodySizeMiddleware, max_bytes=settings.max_body_bytes),
+            Middleware(BearerAuthMiddleware, registry=registry),
+        ],
         lifespan=lifespan,
     )
     # Exposed for tests and introspection.
