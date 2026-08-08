@@ -44,8 +44,9 @@ everything protocol-related comes from `a2a-sdk`; this repo is only the minimal 
    - *Why:* store-and-forward means leaving a message for an agent that is **not
      awake**, whose session name you cannot possibly know. An earlier iteration made a
      bare principal non-addressable ("nobody could read it") and that broke the hub's
-     whole purpose — sending to `agent-b` returned `REJECTED`, and messages already
-     stored under a bare owner became unreadable. Sessions must isolate *processes*,
+     whole purpose — sending to a bare agent name returned `REJECTED`, and messages
+     already stored under a bare owner became unreadable. Sessions must isolate
+     *processes*,
      never make an agent unreachable. Addressing is session-optional; authenticating
      is not.
    - Caveat: when the two mailboxes are merged, the response is not paginated
@@ -131,7 +132,8 @@ Kubernetes is required.
   (`ghcr.io/tlmak0/a2a-hub`, `:latest` + immutable `:sha-<commit>`).
 - This repo does **not** deploy. Kubernetes manifests and the deploy pipeline live in a
   **separate private infra repo** that consumes this GHCR image. The `publish` job optionally
-  notifies that repo (`repository_dispatch`) when `MYINFRA_DISPATCH_TOKEN` is set.
+  notifies that repo (`repository_dispatch`) when the `INFRA_REPO` variable and the
+  `INFRA_DISPATCH_TOKEN` secret are configured.
 
 ## The hub is shared infrastructure: don't break the contract silently
 

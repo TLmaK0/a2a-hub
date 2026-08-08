@@ -32,8 +32,8 @@ jobs:
 
   # Publish the container image to GHCR on a merge to main (after the gate). This
   # repo is the self-contained service; deployment lives in a separate private infra
-  # repo that consumes this image. If the MYINFRA_DISPATCH_TOKEN secret is set, this
-  # job also notifies that repo to roll out the new image.
+  # repo that consumes this image. When INFRA_REPO/INFRA_DISPATCH_TOKEN are configured,
+  # this job also notifies that repo to roll out the new image.
   publish:
     name: build and push image
     needs: [test]
