@@ -3,6 +3,8 @@ name = "a2a-hub"
 version = "0.1.0"
 description = "A2A store-and-forward hub server for agent-to-agent messaging"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Hugo Freire", email = "hugofreiregil@gmail.com" }
 ]

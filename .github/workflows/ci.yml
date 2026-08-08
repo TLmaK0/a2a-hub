@@ -69,16 +69,18 @@ jobs:
           cache-from: type=gha,scope=a2a-hub
           cache-to: type=gha,mode=max,scope=a2a-hub
 
-      # Optional: trigger the private infra repo to deploy the new image. No-op
-      # unless MYINFRA_DISPATCH_TOKEN (a PAT with `repo` on the infra repo) is set.
-      - name: Notify infra repo to deploy
+      # Optional: tell a deployment repo that a new image is available. No-op unless
+      # both the INFRA_REPO variable (owner/repo) and the INFRA_DISPATCH_TOKEN secret
+      # (a fine-grained PAT with Contents: write on that repo) are configured.
+      - name: Notify deployment repo
         env:
-          GH_TOKEN: ${{ secrets.MYINFRA_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN }}
+          INFRA_REPO: ${{ vars.INFRA_REPO }}
         run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "MYINFRA_DISPATCH_TOKEN not set; skipping infra deploy trigger."
+          if [ -z "$GH_TOKEN" ] || [ -z "$INFRA_REPO" ]; then
+            echo "INFRA_REPO/INFRA_DISPATCH_TOKEN not configured; skipping deploy trigger."
             exit 0
           fi
-          gh api repos/tlmak0/myinfra/dispatches \
+          gh api "repos/${INFRA_REPO}/dispatches" \
             -f event_type=a2a-hub-deploy \
             -F client_payload[sha]="${GITHUB_SHA}"
