@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies (runtime + dev)
+        run: uv sync --frozen
+
+      # The minimum coverage (>=90%) is enforced in pyproject.toml
+      # (--cov-fail-under=90): this job gates the image publish.
+      - name: Tests + coverage (pytest)
+        run: uv run pytest
+
+  # Publish the container image to GHCR on a merge to main (after the gate). This
+  # repo is the self-contained service; deployment lives in a separate private infra
+  # repo that consumes this image. If the MYINFRA_DISPATCH_TOKEN secret is set, this
+  # job also notifies that repo to roll out the new image.
+  publish:
+    name: build and push image
+    needs: [test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/tlmak0/a2a-hub
+    steps:
+      - uses: actions/checkout@v4
+
+      # The docker-container driver is required for the type=gha cache export below.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=a2a-hub
+          cache-to: type=gha,mode=max,scope=a2a-hub
+
+      # Optional: trigger the private infra repo to deploy the new image. No-op
+      # unless MYINFRA_DISPATCH_TOKEN (a PAT with `repo` on the infra repo) is set.
+      - name: Notify infra repo to deploy
+        env:
+          GH_TOKEN: ${{ secrets.MYINFRA_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "MYINFRA_DISPATCH_TOKEN not set; skipping infra deploy trigger."
+            exit 0
+          fi
+          gh api repos/tlmak0/myinfra/dispatches \
+            -f event_type=a2a-hub-deploy \
+            -F client_payload[sha]="${GITHUB_SHA}"

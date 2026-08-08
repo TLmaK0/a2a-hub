@@ -1,0 +1,88 @@
+"""Hub Agent Card, served at ``/.well-known/agent-card.json``.
+
+This is the A2A discovery point: it advertises capabilities, transport, the auth
+scheme (bearer) and the mailbox skill. Public (no auth), by protocol design.
+"""
+
+from __future__ import annotations
+
+from a2a.types.a2a_pb2 import (
+    AgentCapabilities,
+    AgentCard,
+    AgentInterface,
+    AgentSkill,
+    HTTPAuthSecurityScheme,
+    SecurityRequirement,
+    SecurityScheme,
+    StringList,
+)
+from a2a.utils import TransportProtocol
+
+from a2a_hub import __version__
+
+
+#: Name of the security scheme declared in the card.
+SECURITY_SCHEME_NAME = "bearer"
+
+
+def build_agent_card(public_url: str, rpc_url: str = "/") -> AgentCard:
+    """Build the hub's Agent Card.
+
+    Args:
+        public_url: public base URL of the server (e.g. ``https://a2a.example.com``).
+        rpc_url: path of the A2A JSON-RPC endpoint.
+    """
+    endpoint = public_url.rstrip("/") + "/" + rpc_url.lstrip("/")
+
+    card = AgentCard(
+        name="a2a-hub",
+        description=(
+            "A2A store-and-forward hub: a mailbox between agents. Routes each "
+            "message to its recipient's mailbox (Task), which is picked up with "
+            "ListTasks/GetTask."
+        ),
+        version=__version__,
+        supported_interfaces=[
+            AgentInterface(
+                url=endpoint,
+                protocol_binding=TransportProtocol.JSONRPC,
+                protocol_version="1.0",
+            )
+        ],
+        capabilities=AgentCapabilities(
+            streaming=False,
+            push_notifications=False,
+        ),
+        default_input_modes=["text/plain"],
+        default_output_modes=["text/plain"],
+        skills=[
+            AgentSkill(
+                id="mailbox",
+                name="Store-and-forward mailbox",
+                description=(
+                    "Delivers a message to the mailbox of the agent named in the "
+                    "'recipient' metadata. The recipient picks it up with ListTasks."
+                ),
+                tags=["mailbox", "relay", "a2a"],
+                examples=[
+                    'SendMessage with metadata {"recipient": "agent-b"}',
+                ],
+                input_modes=["text/plain"],
+                output_modes=["text/plain"],
+            )
+        ],
+    )
+
+    scheme = SecurityScheme(
+        http_auth_security_scheme=HTTPAuthSecurityScheme(
+            scheme="bearer",
+            description="One token per agent (Authorization: Bearer <token>).",
+        )
+    )
+    card.security_schemes[SECURITY_SCHEME_NAME].CopyFrom(scheme)
+
+    requirement = SecurityRequirement()
+    requirement.schemes[SECURITY_SCHEME_NAME].CopyFrom(StringList())
+    card.security_requirements.append(requirement)
+
+    return card

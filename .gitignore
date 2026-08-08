@@ -1,0 +1,23 @@
+# Secretos y entorno — NUNCA se commitean
+.env
+*.env
+!.env.example
+local/
+secrets/
+*.token
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Datos locales (task store SQLite de desarrollo)
+*.db
+*.sqlite
+*.sqlite3

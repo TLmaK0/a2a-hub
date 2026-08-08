@@ -1,0 +1,46 @@
+[project]
+name = "a2a-hub"
+version = "0.1.0"
+description = "A2A store-and-forward hub server for agent-to-agent messaging"
+readme = "README.md"
+authors = [
+    { name = "Hugo Freire", email = "hugofreiregil@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "a2a-sdk[http-server,sqlite]>=1.1.2",
+    "uvicorn[standard]>=0.52.1",
+]
+
+[project.scripts]
+a2a-hub = "a2a_hub:main"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=a2a_hub --cov-report=term-missing --cov-fail-under=90"
+filterwarnings = [
+    "ignore::DeprecationWarning:a2a.utils.proto_utils",
+]
+
+[tool.coverage.run]
+source = ["a2a_hub"]
+omit = ["src/a2a_hub/__main__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
