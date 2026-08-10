@@ -147,6 +147,13 @@ everything protocol-related comes from `a2a-sdk`; this repo is only the minimal 
   (JSON-RPC against the ASGI app with `httpx`), not just the isolated module. Unit tests
   complement branches that are hard to force over HTTP (cancel, rejections, resolver).
 - Run: `uv run pytest`. Run the tests **before** containerizing or publishing.
+- **Green tests do not prove the image builds.** `pytest` never containerizes, so a broken
+  `Dockerfile` passes the test gate. This has already cost us: a change declared a new file
+  in `pyproject.toml` (`license-files`) that the `Dockerfile` did not copy, the tests stayed
+  green, it merged, and the publish job then failed on every push — so for two commits no
+  image existed and no fix could reach a running deployment. Run `docker build .` yourself
+  before trusting a green check on anything that touches `Dockerfile`, `pyproject.toml` or
+  the packaged files. Building the image belongs in the PR gate, not only after the merge.
 - test→feature map: `test_auth_http`/`test_auth_unit` (auth), `test_mailbox` (mailbox and
   isolation), `test_card` (discovery), `test_config` (config), `test_executor_unit`
   (executor/resolver), `test_app` (fail-closed startup, lifecycle), `test_server` (startup),
