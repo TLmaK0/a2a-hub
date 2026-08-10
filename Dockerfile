@@ -13,8 +13,10 @@ COPY --from=ghcr.io/astral-sh/uv:0.12 /uv /bin/uv
 
 WORKDIR /app
 
-# Dependency layer (cacheable): manifests first.
-COPY pyproject.toml uv.lock README.md ./
+# Dependency layer (cacheable): manifests first. Every file referenced by the project
+# metadata must be here, or building the local package fails inside the image:
+# `readme` needs README.md and `license-files` needs LICENSE.
+COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 RUN uv sync --frozen --no-dev
 

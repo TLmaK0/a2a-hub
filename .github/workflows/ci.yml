@@ -30,6 +30,15 @@ jobs:
       - name: Tests + coverage (pytest)
         run: uv run pytest
 
+      # Build the image on every PR too, without pushing. The tests passing does not
+      # prove the image builds: a broken Dockerfile used to reach main green and only
+      # failed in `publish`, i.e. after the merge, leaving the service unable to ship.
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+
   # Publish the container image to GHCR on a merge to main (after the gate). This
   # repo is the self-contained service; deployment lives in a separate private infra
   # repo that consumes this image. When INFRA_REPO/INFRA_DISPATCH_TOKEN are configured,
