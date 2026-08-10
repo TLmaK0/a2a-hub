@@ -10,10 +10,18 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  IMAGE: ghcr.io/tlmak0/a2a-hub
+
 jobs:
   test:
     name: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tree: ${{ steps.tree.outputs.tree }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,33 +38,68 @@ jobs:
       - name: Tests + coverage (pytest)
         run: uv run pytest
 
-      # Build the image on every PR too, without pushing. The tests passing does not
-      # prove the image builds: a broken Dockerfile used to reach main green and only
-      # failed in `publish`, i.e. after the merge, leaving the service unable to ship.
-      - name: Build image (no push)
+      # The image is identified by the git TREE, not the commit. A tree hash is the
+      # hash of the content, so it survives a rebase: the commit sha changes, the tree
+      # does not. That is what lets `publish` find the artifact this job validated even
+      # though merging rebases the branch onto main and rewrites the commit sha.
+      - name: Resolve content id (git tree)
+        id: tree
+        run: echo "tree=$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Never push an image built from a fork: on fork PRs the GITHUB_TOKEN is
+      # read-only by design, and pushing code from an untrusted branch into our own
+      # registry namespace is not something to do by default. Forks are validated by
+      # building without pushing; see the fork note in `publish`.
+      - name: Log in to GHCR
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build ONCE, here, and keep the artifact. What gets promoted to production is
+      # this exact digest — production never gets a rebuild, because a rebuild is a
+      # different artifact than the one that passed the gate (base image drift,
+      # timestamps, resolved layers) even from identical sources.
+      - name: Build and push the validated image
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}:tree-${{ steps.tree.outputs.tree }}
+          cache-from: type=gha,scope=a2a-hub
+          cache-to: type=gha,mode=max,scope=a2a-hub
+
+      # Fork PRs and pushes to main: prove the image still builds, without pushing.
+      # On a push to main the artifact already exists from the PR, so rebuilding here
+      # would defeat the purpose; this only runs for forks.
+      - name: Build image (no push, fork PRs)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
         uses: docker/build-push-action@v6
         with:
           context: .
           push: false
+          cache-from: type=gha,scope=a2a-hub
 
-  # Publish the container image to GHCR on a merge to main (after the gate). This
-  # repo is the self-contained service; deployment lives in a separate private infra
-  # repo that consumes this image. When INFRA_REPO/INFRA_DISPATCH_TOKEN are configured,
-  # this job also notifies that repo to roll out the new image.
+  # Promote the image that the gate validated. This job does NOT build: it retags the
+  # exact digest produced in the PR as the production tags, so what runs in production
+  # is bit-for-bit what passed CI.
   publish:
-    name: build and push image
+    name: promote validated image
     needs: [test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    env:
-      IMAGE: ghcr.io/tlmak0/a2a-hub
     steps:
       - uses: actions/checkout@v4
 
-      # The docker-container driver is required for the type=gha cache export below.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -67,16 +110,38 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:sha-${{ github.sha }}
-          cache-from: type=gha,scope=a2a-hub
-          cache-to: type=gha,mode=max,scope=a2a-hub
+      # Merging rebases the branch, so main's commit sha is new — but its tree is the
+      # content that was validated, so the tag still resolves. If it does not, the
+      # content on main is not what CI approved (a conflicting rebase, a fork PR, a
+      # direct push) and we FAIL rather than quietly rebuild: shipping an unvalidated
+      # artifact to shared infrastructure is the failure mode this job exists to stop.
+      - name: Find the validated image for this content
+        id: find
+        run: |
+          tree="$(git rev-parse HEAD^{tree})"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          if ! docker buildx imagetools inspect "${IMAGE}:tree-${tree}" >/dev/null 2>&1; then
+            echo "::error::No validated image for tree ${tree}. Nothing was built for the"\
+                 "content now on main, so there is nothing to promote. This happens when a"\
+                 "rebase changed the content, when the PR came from a fork, or on a direct"\
+                 "push to main. Re-run CI on a PR whose head matches main, and merge with a"\
+                 "clean rebase."
+            exit 1
+          fi
+          echo "Found validated image: ${IMAGE}:tree-${tree}"
+
+      # `imagetools create` writes new tags pointing at the SAME manifest digest. It
+      # does not pull, rebuild or re-upload layers, and it does not create a new
+      # package version — the production tags simply join the version the PR published.
+      - name: Promote it to the production tags
+        run: |
+          tree="${{ steps.find.outputs.tree }}"
+          docker buildx imagetools create \
+            --tag "${IMAGE}:latest" \
+            --tag "${IMAGE}:sha-${GITHUB_SHA}" \
+            "${IMAGE}:tree-${tree}"
+          echo "Promoted (same digest, no rebuild):"
+          docker buildx imagetools inspect "${IMAGE}:sha-${GITHUB_SHA}" | head -5
 
       # Optional: tell a deployment repo that a new image is available. No-op unless
       # both the INFRA_REPO variable (owner/repo) and the INFRA_DISPATCH_TOKEN secret
