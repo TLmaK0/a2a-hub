@@ -21,3 +21,7 @@ htmlcov/
 *.db
 *.sqlite
 *.sqlite3
+
+# Agent scratch, incl. per-task worktrees. The whole dir: an always-dirty repo
+# makes the fleet's at-risk-work detector (git status based) stop warning.
+.claude/
