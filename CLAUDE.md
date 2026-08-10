@@ -27,6 +27,11 @@ official **`a2a-sdk`**. The protocol is not reimplemented.
 
 ## Non-negotiable rules
 
+- **One worktree per task** — `git worktree add .claude/worktrees/<branch> -b <branch> origin/main`,
+  never the main checkout (several agents share this repo and would overwrite each other).
+  Land through a PR; never push to `main`. See `AGENTS.md`.
+- **Features, bugs and plans live in GitHub issues**, one per thing; plan changes are
+  comments on the issue.
 - **Everything in English** — code, comments, docstrings, docs and commit messages.
 - **No infra references in this repo** — it is publishable. GitHub/GHCR identifiers
   (`ghcr.io/tlmak0/...`) and authorship are fine; private cluster/domain/host details are not.

@@ -3,6 +3,33 @@
 Procedure and knowledge for working in this repo. The *what it is* and status live in
 `README.md`; here goes the *how* and the *why* of the decisions.
 
+## Working rule: one worktree per task (mandatory)
+
+**Never work in the main checkout.** Every task gets its own git worktree on its own branch:
+
+```bash
+git worktree add .claude/worktrees/<branch> -b <branch> origin/main
+```
+
+*Why:* several agents can be working in this same repo at the same time. In the shared
+main checkout they overwrite each other — one agent's `git checkout`, staged files or
+half-finished edits land in another agent's commit. A worktree gives each task its own
+working directory and its own branch, so the work is isolated and only meets the others
+in the PR.
+
+- One task = one branch = one worktree. Land it through a PR (see the shared-infrastructure
+  rules below); never push to `main`.
+- `.claude/worktrees/` is git-ignored, so worktrees never show up as untracked noise.
+- **Do not delete** worktrees or branches you did not create, and do not touch uncommitted
+  files that are not yours — report them instead. Another agent is probably mid-task.
+
+## Issues, not PLAN.md (mandatory)
+
+Features, bugs, plans and their changes live in **GitHub issues**, one issue per thing.
+A change of plan is a **comment on its issue**, not an edit to a document. Keep the issue
+self-contained enough that another agent can pick it up cold. (Historic plans stay as
+history in whatever doc already holds them; nothing new goes there.)
+
 ## Goal
 
 An A2A server that lets agents talk over HTTPS with authentication, reusing the standard

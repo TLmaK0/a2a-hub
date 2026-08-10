@@ -21,3 +21,6 @@ htmlcov/
 *.db
 *.sqlite
 *.sqlite3
+
+# Agent worktrees (one per task, never the main checkout)
+.claude/worktrees/
