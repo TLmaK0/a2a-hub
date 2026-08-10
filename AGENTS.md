@@ -32,6 +32,16 @@ A change of plan is a **comment on its issue**, not an edit to a document. Keep 
 self-contained enough that another agent can pick it up cold. (Historic plans stay as
 history in whatever doc already holds them; nothing new goes there.)
 
+**The issue holds the progress, not just the plan.** Comment on it *at the moment* it
+happens — every measurement taken, step closed, avenue ruled out, and every assumption
+of yours that turned out to be false. Not a report at the end.
+
+*Why:* a session's context dies with the session. Work has been lost this way — files
+left uncommitted with nobody able to tell what the agent intended, recoverable only from
+the reflog, which itself expires. With the progress in the issue, replacing an agent is
+cheap: the next one picks it up by reading. It also lets others catch a wrong direction
+early, instead of after hours are spent on it.
+
 ## Goal
 
 An A2A server that lets agents talk over HTTPS with authentication, reusing the standard

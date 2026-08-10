@@ -31,7 +31,9 @@ official **`a2a-sdk`**. The protocol is not reimplemented.
   never the main checkout (several agents share this repo and would overwrite each other).
   Land through a PR; never push to `main`. See `AGENTS.md`.
 - **Features, bugs and plans live in GitHub issues**, one per thing; plan changes are
-  comments on the issue.
+  comments on the issue. **The issue also holds the progress**: comment as things happen
+  (measurements, steps closed, dead ends, assumptions proved false), not at the end — a
+  session's context dies with the session.
 - **Everything in English** — code, comments, docstrings, docs and commit messages.
 - **No infra references in this repo** — it is publishable. GitHub/GHCR identifiers
   (`ghcr.io/tlmak0/...`) and authorship are fine; private cluster/domain/host details are not.
