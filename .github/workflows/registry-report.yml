@@ -1,0 +1,123 @@
+name: registry report
+
+# REPORT ONLY — this workflow never deletes anything, by design.
+#
+# PR builds publish the validated image as `:tree-<git-tree-sha>` (see ci.yml). When a PR
+# merges, the production tags join that same version, so a merged PR leaves no extra
+# version behind. What does accumulate is versions from PRs that never merged: nothing
+# promotes them and their `tree-*` tag is the only reference.
+#
+# Deleting package versions is irreversible and has already come close to breaking the
+# service: every build pushes an index plus two UNTAGGED children (platform manifest and
+# provenance attestation), and the untagged children of the *running* image are
+# indistinguishable from orphans. A previous manual prune found 12 untagged versions safe
+# to delete and 2 that were not. So this job lists candidates and stops; deletion stays a
+# human decision on a specific list of IDs.
+
+on:
+  # Also runs on PRs that touch this file, so the reporter can be proven to work before
+  # it is merged. workflow_dispatch only exists on the default branch, so without this
+  # the first real run would be after the merge — untested.
+  pull_request:
+    paths:
+      - .github/workflows/registry-report.yml
+  schedule:
+    # Weekly, on an off-peak minute that is not :00.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      grace_days:
+        description: "Only report tree-* versions older than this many days"
+        required: false
+        default: "30"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  report:
+    name: report stale tree-* versions
+    runs-on: ubuntu-latest
+    steps:
+      - name: List candidates (deletes nothing)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GRACE_DAYS: ${{ inputs.grace_days || '30' }}
+          PKG: a2a-hub
+        run: |
+          set -euo pipefail
+
+          # The GITHUB_TOKEN is not a user, so /user/packages does not apply to it; the
+          # owner-scoped endpoint is the one that can work here. Try it, then fall back,
+          # and check the EXIT CODE — a 403/404 still writes JSON to stdout.
+          if gh api "/users/${{ github.repository_owner }}/packages/container/${PKG}/versions?per_page=100" > versions.json 2>/dev/null; then
+            echo "Listed via the owner-scoped endpoint."
+          elif gh api "/user/packages/container/${PKG}/versions?per_page=100" > versions.json 2>/dev/null; then
+            echo "Listed via the authenticated-user endpoint."
+          else
+            echo "::error::Could not list package versions with this token. Neither the"\
+                 "owner-scoped nor the user endpoint worked (checked by exit code, not by"\
+                 "output). The report needs a token that can read packages; wire one in"\
+                 "before relying on this job."
+            exit 1
+          fi
+
+          python3 - "$GRACE_DAYS" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, sys, datetime
+
+          grace = int(sys.argv[1])
+          versions = json.load(open("versions.json"))
+          now = datetime.datetime.now(datetime.timezone.utc)
+
+          def tags(v):
+              return v.get("metadata", {}).get("container", {}).get("tags", []) or []
+
+          promoted, untagged, candidates, young = [], [], [], []
+          for v in versions:
+              t = tags(v)
+              age = (now - datetime.datetime.fromisoformat(
+                  v["created_at"].replace("Z", "+00:00"))).days
+              if not t:
+                  # Never a candidate: an untagged version is a child of some index, and
+                  # the children of the running image look exactly like orphans.
+                  untagged.append((v["id"], age))
+              elif any(x == "latest" or x.startswith("sha-") for x in t):
+                  # Promoted: reachable from main. Keep, even if it also carries a tree-* tag.
+                  promoted.append((v["id"], t, age))
+              elif all(x.startswith("tree-") for x in t):
+                  (candidates if age >= grace else young).append((v["id"], t, age))
+              else:
+                  promoted.append((v["id"], t, age))  # unknown tag scheme: treat as keep
+
+          print(f"## Registry report — grace period {grace} days\n")
+          print(f"- total versions: **{len(versions)}**")
+          print(f"- promoted / reachable from main (keep): **{len(promoted)}**")
+          print(f"- untagged children (never candidates): **{len(untagged)}**")
+          print(f"- tree-* within the grace period (keep for now): **{len(young)}**")
+          print(f"- tree-* older than the grace period (**candidates**): **{len(candidates)}**\n")
+
+          if candidates:
+              print("### Candidates — review before doing anything\n")
+              print("| version id | tags | age (days) |")
+              print("| --- | --- | --- |")
+              for vid, t, age in sorted(candidates, key=lambda c: -c[2]):
+                  print(f"| `{vid}` | {', '.join(t)} | {age} |")
+              print()
+              print("**Before deleting any of these**, resolve what the cluster is actually")
+              print("running and confirm none of these digests is it — by digest, not by tag.")
+              print("That check cannot be done from here (no cluster access from CI), which is")
+              print("one reason this job does not delete.")
+          else:
+              print("No candidates. Nothing to do.")
+
+          print("\n### Not candidates, and why\n")
+          print("- **Untagged versions are never listed as candidates.** Each build pushes an")
+          print("  index plus two untagged children; the children of the *running* image are")
+          print("  indistinguishable from orphans. Deleting untagged versions in bulk is the")
+          print("  one mistake that breaks production.")
+          print("- **Anything tagged `latest` or `sha-*` is kept**, since those are the")
+          print("  promoted images reachable from main.")
+          PY
+
+          echo "Report written to the job summary. Nothing was deleted."
