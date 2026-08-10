@@ -19,7 +19,9 @@ in the PR.
 
 - One task = one branch = one worktree. Land it through a PR (see the shared-infrastructure
   rules below); never push to `main`.
-- `.claude/worktrees/` is git-ignored, so worktrees never show up as untracked noise.
+- `.claude/` is git-ignored **whole**, so worktrees never show up as untracked noise.
+  This matters beyond tidiness: the fleet detector for work-at-risk is `git status` based,
+  so a repo that is permanently dirty stops warning when something real is uncommitted.
 - **Do not delete** worktrees or branches you did not create, and do not touch uncommitted
   files that are not yours — report them instead. Another agent is probably mid-task.
 
