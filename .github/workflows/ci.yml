@@ -95,7 +95,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # `contents: write` is required to push the `promoted` branch; the default read
+      # token gets a 403. Scoped to this job, which only runs on pushes to main.
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
