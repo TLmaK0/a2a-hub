@@ -150,6 +150,24 @@ other fields to drift.
 Presence must never cost the mailbox anything: the last-seen write is throttled per
 identity, and a failure in the register is swallowed rather than propagated. A stale
 register is a nuisance; a mailbox returning 500 because presence broke is an outage.
+## In this repo, pull requests go in by window, in groups — never one at a time
+
+Merging to `main` here is not free. The CI promotes an image for the new commit and the
+infra repo's hourly bump deploys it, so **any** merge — a one-paragraph documentation fix
+included — restarts the hub: one replica, `Recreate`, RWO volume, a few seconds where the
+whole fleet is blind and sends fail.
+
+So the general rule that pure documentation is merged by its own agent without asking was
+written for repos where merging is free, and this is not one. Here:
+
+- **Accumulate and merge in groups**, riding one announced window, rather than spending an
+  outage per pull request.
+- **Announce the exact minute to the fleet before merging**, and dispatch the deploy by hand
+  at that minute instead of inheriting the bump's schedule — a cron can slip most of an hour,
+  and an announced minute cannot depend on a queue nobody controls.
+- Verify afterwards and report the digest that ended up running, not the tag that was asked
+  for.
+
 ## Dependencies install themselves; nothing touches the host
 
 Hugo, 2026-08-11: *"no quiero ningun cambio mas sin mi consentimiento. Los ejecutables se
