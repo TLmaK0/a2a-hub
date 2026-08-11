@@ -10,6 +10,7 @@ import pytest
 
 from conftest import (
     AGENT_A,
+    SESSION,
     IDENT_A,
     IDENT_B,
     TOKEN_A,
@@ -410,3 +411,37 @@ async def test_updating_your_own_introduction_unchanged_does_not_warn(client):
 
 async def test_retire_requires_authentication(client):
     assert (await client.post(RETIRE)).status_code == 401
+
+
+async def test_an_orphan_row_is_withdrawn_by_claiming_its_session(client):
+    """How the ghost row actually gets cleaned, since it belongs to nobody.
+
+    A session is claimed under your own token, so any session of a principal can be
+    taken and withdrawn by that principal. That is what makes the shared-default row
+    recoverable at all: without it, an entry nobody owns would be permanent.
+    """
+    orphan = "claude-main"
+    # Someone lands in the shared row by accident.
+    await client.post(
+        REGISTER, json=declaration(role="manager"), headers=auth(TOKEN_A, orphan)
+    )
+    listed = (await client.get(LIST, headers=auth(TOKEN_A))).json()["agents"]
+    assert f"{AGENT_A}/{orphan}" in [a["identity"] for a in listed]
+
+    # Anyone holding that principal's token can claim the session and retire it.
+    retired = await client.post(RETIRE, headers=auth(TOKEN_A, orphan))
+
+    assert retired.status_code == 200
+    after = (await client.get(LIST, headers=auth(TOKEN_A))).json()["agents"]
+    assert f"{AGENT_A}/{orphan}" not in [a["identity"] for a in after]
+
+
+async def test_retiring_does_not_reach_another_principal(client):
+    """Recoverable is not the same as anyone-can-delete-anyone."""
+    await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_B))
+
+    # agent-a claims a session name, but under ITS OWN principal — never agent-b's.
+    await client.post(RETIRE, headers=auth(TOKEN_A, SESSION))
+
+    still = (await client.get(LIST, headers=auth(TOKEN_B))).json()["agents"]
+    assert IDENT_B in [a["identity"] for a in still]
