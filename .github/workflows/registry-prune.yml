@@ -129,9 +129,33 @@ jobs:
             exit 0
           fi
 
-          # One at a time, checking the exit code, aborting on the first failure rather
-          # than pressing on through a partially broken state.
+          # Re-resolve what is referenced RIGHT NOW, not when the plan was drawn. Between
+          # the two, a PR can open and publish, or a merge can promote. The plan is a
+          # proposal; the state at the instant of deleting is what decides.
+          if ! gh pr list --repo "$REPO" --state open --limit 100 --json headRefOid \
+                 --jq '.[].headRefOid' > heads_now.txt; then
+            echo "::error::Could not re-check open pull requests. Deleting nothing."
+            exit 1
+          fi
+          : > live_trees_now.txt
+          while read -r sha; do
+            [ -n "$sha" ] || continue
+            if ! gh api "repos/${REPO}/commits/${sha}" --jq '.commit.tree.sha' >> live_trees_now.txt; then
+              echo "::error::Could not re-resolve the tree of ${sha}. Deleting nothing."
+              exit 1
+            fi
+          done < heads_now.txt
+
+          # One at a time, re-reading each version immediately before deleting it and
+          # aborting on the first surprise rather than pressing on through a partially
+          # broken state. A stale plan must not be able to delete a live image.
           for id in $ids; do
+            if ! gh api "/users/${OWNER}/packages/container/${PKG}/versions/${id}" > version.json; then
+              echo "::error::Could not re-read version ${id}. Stopping; nothing further is attempted."
+              exit 1
+            fi
+            python3 .github/scripts/confirm_deletable.py version.json live_trees_now.txt "$pinned"
+
             if gh api -X DELETE "/users/${OWNER}/packages/container/${PKG}/versions/${id}"; then
               echo "deleted $id"
             else
