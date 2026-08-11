@@ -22,25 +22,42 @@ on:
         description: "Delete tree-* versions older than this many days"
         required: false
         default: "30"
+  # Run on PRs that touch this job, so the resolution half is exercised before it is ever
+  # armed. Without this the job's only proof is a run of an older revision of itself — the
+  # trap that let a missing checkout survive review here.
+  pull_request:
+    paths:
+      - ".github/workflows/registry-prune.yml"
+      - ".github/scripts/prune_plan.py"
 
 permissions:
   contents: read
   packages: write
+  pull-requests: read
 
 jobs:
   prune:
     name: prune stale versions
     runs-on: ubuntu-latest
     steps:
+      # The plan lives in a file in this repo, so the job needs the repo. Obvious in
+      # hindsight; the job cannot run at all without it.
+      - uses: actions/checkout@v4
+
       - name: Resolve, then delete
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
           GRACE_DAYS: ${{ inputs.grace_days || '30' }}
           # Arming gate: until this repository variable is exactly "true", the job resolves
           # and reports what it WOULD delete and deletes nothing. That makes the first run
           # a dry run whose list can be authorised once; after the variable is set the job
           # deletes on its own, with no further approval.
           ARMED: ${{ vars.REGISTRY_PRUNE_ARMED }}
+          # A pull request is a place to check the resolution, never a place to delete —
+          # otherwise arming the variable turns every PR that edits this file into a live
+          # prune of whatever that branch's version of the rules decides.
+          EVENT: ${{ github.event_name }}
           OWNER: ${{ github.repository_owner }}
           PKG: a2a-hub
           # Sanitisation cut agreed with Hugo: this build and anything newer is kept.
@@ -55,7 +72,35 @@ jobs:
             exit 1
           fi
 
-          python3 .github/scripts/prune_plan.py versions.json "$GRACE_DAYS" "$CUT_TAG" > plan.txt
+          # What must survive is decided by what still POINTS at an image, not by how old
+          # it is. A tree-* tag is a git tree hash, so every open PR's head resolves to the
+          # exact tag that must not be deleted. Any failure here means we do not know what
+          # is referenced, and not knowing deletes nothing.
+          if ! gh pr list --repo "$REPO" --state open --limit 100 --json headRefOid \
+                 --jq '.[].headRefOid' > heads.txt; then
+            echo "::error::Could not list open pull requests. Deleting nothing."
+            exit 1
+          fi
+          : > live_trees.txt
+          while read -r sha; do
+            [ -n "$sha" ] || continue
+            if ! gh api "repos/${REPO}/commits/${sha}" --jq '.commit.tree.sha' >> live_trees.txt; then
+              echo "::error::Could not resolve the tree of ${sha}. Deleting nothing."
+              exit 1
+            fi
+          done < heads.txt
+
+          # The digest the deployment actually pins, read from the public promoted branch —
+          # no credential, and it is the same source the deploy consumes.
+          if ! gh api "repos/${REPO}/contents/promoted.json?ref=promoted" \
+                 --jq '.content' | base64 -d > promoted.json; then
+            echo "::error::Could not read the promoted digest. Deleting nothing."
+            exit 1
+          fi
+          pinned=$(python3 -c 'import json;print(json.load(open("promoted.json"))["digest"])')
+
+          python3 .github/scripts/prune_plan.py \
+            versions.json "$GRACE_DAYS" "$CUT_TAG" live_trees.txt "$pinned" > plan.txt
 
           cat plan.txt >> "$GITHUB_STEP_SUMMARY"
           cat plan.txt
@@ -64,6 +109,11 @@ jobs:
 
           if [ -z "$ids" ]; then
             echo "Nothing to delete."
+            exit 0
+          fi
+
+          if [ "$EVENT" = "pull_request" ]; then
+            echo "::notice::Pull request run — resolution checked, deletion never attempted."
             exit 0
           fi
 
