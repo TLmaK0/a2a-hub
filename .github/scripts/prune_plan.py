@@ -69,14 +69,20 @@ def classify(
                 reason = f"still referenced: {referenced[0]} is the tree of an open pull request"
             elif age >= grace:
                 delete.append(
-                    (version["id"], current, age, "tree-* only, unreferenced, past the grace period")
+                    (
+                        version["id"],
+                        current,
+                        age,
+                        "tree-* only, unreferenced, past the grace period",
+                        version.get("name", ""),
+                    )
                 )
                 continue
             else:
                 reason = f"tree-* only but {age}d old, inside the {grace}d grace period"
         else:
             reason = "unrecognised tag scheme: unknown means keep"
-        keep.append((version["id"], current, age, reason))
+        keep.append((version["id"], current, age, reason, version.get("name", "")))
     return delete, keep
 
 
@@ -105,12 +111,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"pinned={pinned_digest} pinned_version={'found' if pinned else 'MISSING'}")
     print(f"live_trees={len(live_trees)} (open pull requests)")
     print(f"total={len(versions)} keep={len(keep)} delete={len(delete)}")
+    # The digest goes on every line because that is the only durable name a version
+    # has: ids are opaque and tags move, so a log that says only "deleted 1119659652"
+    # cannot be checked against anything afterwards.
     print("--- DELETE ---")
-    for vid, t, age, why in delete:
-        print(f"{vid}\t{','.join(t)}\t{age}d\t{why}")
+    for vid, t, age, why, digest in delete:
+        print(f"{vid}\t{','.join(t)}\t{age}d\t{digest}\t{why}")
     print("--- KEEP ---")
-    for vid, t, age, why in keep:
-        print(f"{vid}\t{','.join(t) or '(untagged)'}\t{age}d\t{why}")
+    for vid, t, age, why, digest in keep:
+        print(f"{vid}\t{','.join(t) or '(untagged)'}\t{age}d\t{digest}\t{why}")
 
     if cut is None:
         print("::error::The agreed cut build is not in this registry. Refusing to act.", file=sys.stderr)

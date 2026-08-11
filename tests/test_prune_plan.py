@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime
 import importlib.util
+import json
 import pathlib
 
 import pytest
@@ -39,7 +40,7 @@ def classify(versions, grace=30, live_trees=frozenset(), pinned=PINNED):
 
 
 def reason_for(keep, vid):
-    return next(reason for kid, _, _, reason in keep if kid == vid)
+    return next(entry[3] for entry in keep if entry[0] == vid)
 
 
 def test_untagged_versions_are_never_candidates():
@@ -73,7 +74,7 @@ def test_a_tree_of_an_open_pull_request_survives_any_age():
 
 def test_an_unreferenced_tree_past_the_grace_period_is_deleted():
     delete, _ = classify([version(1, ["tree-48cd8c0"], days_old=400)])
-    assert [vid for vid, *_ in delete] == [1]
+    assert [entry[0] for entry in delete] == [1]
 
 
 def test_an_unreferenced_tree_inside_the_grace_period_survives():
@@ -134,3 +135,28 @@ def test_main_stops_when_the_live_tree_list_is_unreadable(tmp_path):
     argv = [str(versions), "30", "sha-abc", str(tmp_path / "missing.txt"), PINNED]
     with pytest.raises(FileNotFoundError):
         prune_plan.main(argv)
+
+
+def test_every_line_carries_the_digest(capsys, tmp_path):
+    """Ids are opaque and tags move; the digest is the only durable name.
+
+    The first armed run with candidates will happen unattended, so its log has to be
+    checkable against the registry afterwards.
+    """
+    versions = tmp_path / "versions.json"
+    versions.write_text(json.dumps([
+        {"id": 1, "name": PINNED, "created_at": "2026-08-01T00:00:00Z",
+         "metadata": {"container": {"tags": ["sha-abc"]}}},
+        {"id": 2, "name": "sha256:litter", "created_at": "2020-01-01T00:00:00Z",
+         "metadata": {"container": {"tags": ["tree-old"]}}},
+    ]))
+    trees = tmp_path / "trees.txt"
+    trees.write_text("")
+
+    prune_plan.main([str(versions), "30", "sha-abc", str(trees), PINNED])
+    out = capsys.readouterr().out
+
+    delete_line = next(l for l in out.splitlines() if l.startswith("2\t"))
+    assert "sha256:litter" in delete_line
+    keep_line = next(l for l in out.splitlines() if l.startswith("1\t"))
+    assert PINNED in keep_line

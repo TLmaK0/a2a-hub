@@ -158,6 +158,13 @@ jobs:
           # One at a time, re-reading each version immediately before deleting it and
           # aborting on the first surprise rather than pressing on through a partially
           # broken state. A stale plan must not be able to delete a live image.
+          # A count up front, so "how many did it find" is answerable without reading
+          # the plan. The first armed run with candidates will happen unattended, days
+          # from now; the log is the only witness it will have.
+          found=$(printf '%s\n' "$ids" | grep -c .)
+          echo "::notice::prune: ${found} candidate(s) to delete."
+          deleted=0
+
           for id in $ids; do
             if ! gh api "/users/${OWNER}/packages/container/${PKG}/versions/${id}" > version.json; then
               echo "::error::Could not re-read version ${id}. Stopping; nothing further is attempted."
@@ -165,10 +172,22 @@ jobs:
             fi
             python3 .github/scripts/confirm_deletable.py version.json live_trees_now.txt "$pinned"
 
+            # The digest, because ids are opaque and tags move: this line has to be
+            # checkable against the registry months later.
+            digest=$(python3 -c 'import json,sys;print(json.load(open("version.json")).get("name",""))')
+            tags=$(python3 -c 'import json;v=json.load(open("version.json"));print(",".join(v.get("metadata",{}).get("container",{}).get("tags",[])) or "(untagged)")')
+
             if gh api -X DELETE "/users/${OWNER}/packages/container/${PKG}/versions/${id}"; then
-              echo "deleted $id"
+              deleted=$((deleted + 1))
+              echo "deleted ${id} ${digest} ${tags}"
+              echo "deleted \`${id}\` ${digest} \`${tags}\`" >> "$GITHUB_STEP_SUMMARY"
             else
               echo "::error::Failed to delete ${id}. Stopping here; nothing further is attempted."
               exit 1
             fi
           done
+
+          # Found vs deleted, side by side: if they differ, the run stopped early and
+          # that must be as visible as the deletions themselves.
+          echo "::notice::prune: found ${found}, deleted ${deleted}."
+          echo "prune: found ${found}, deleted ${deleted}." >> "$GITHUB_STEP_SUMMARY"
