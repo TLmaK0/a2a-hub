@@ -313,6 +313,19 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
             hub = client
         command = args[0]
 
+        # A session inherited from the host-wide config file is not this agent's
+        # identity, and it silently applies to EVERY command: `inbox` reads the
+        # shared mailbox, `send` signs as the shared identity. Warn on all of them —
+        # `introduce` refuses outright below, because it also overwrites other rows.
+        if hub.config.session_from_shared_file and command != "whoami":
+            print(
+                f"warning: session {hub.config.session!r} comes from the shared config "
+                "file, so this is NOT this agent's identity — every process on the "
+                "host that does not set its own reads the same value. "
+                "Set A2A_HUB_SESSION (note the HUB) or pass --session <name>.",
+                file=sys.stderr,
+            )
+
         if command == "whoami":
             # Never print the token.
             print(f"identity : {hub.config.identity}")

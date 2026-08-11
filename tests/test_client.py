@@ -478,3 +478,26 @@ def test_the_session_source_is_read_from_the_environment(monkeypatch, tmp_path):
            "A2A_HUB_TOKEN": "t", "A2A_HUB_SESSION": "mine"}
     config = ClientConfig.load(environ=env, config_path=tmp_path / "absent.env")
     assert config.session_from_shared_file is False
+
+
+def test_a_shared_session_warns_on_every_command_not_just_introduce(capsys):
+    """`inbox` on a shared session reads someone else's mailbox, silently."""
+    config = ClientConfig(
+        url="https://hub.test/", agent="a", token="t", session="claude-main",
+        session_from_shared_file=True,
+    )
+    hub = HubClient(config, transport=lambda *a: {"result": {"totalSize": 0, "tasks": []}})
+
+    assert main(["inbox"], hub) == 0
+    assert "NOT this agent's identity" in capsys.readouterr().err
+
+
+def test_whoami_does_not_warn_because_it_is_how_you_check(capsys):
+    config = ClientConfig(
+        url="https://hub.test/", agent="a", token="t", session="claude-main",
+        session_from_shared_file=True,
+    )
+    hub = HubClient(config, transport=lambda *a: {})
+
+    assert main(["whoami"], hub) == 0
+    assert capsys.readouterr().err == ""
