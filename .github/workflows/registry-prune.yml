@@ -8,6 +8,14 @@ name: registry prune
 # layer, so while they exist, what was removed from the public repo is still downloadable.
 # A report does not fix that; deleting does.
 #
+# WHAT THIS JOB DOES NOT DO, stated so nobody mistakes it for a privacy guarantee: the
+# pre-sanitisation images were removed by an authorised manual purge, and what runs here
+# only collects `tree-*` litter from builds nothing references any more. A pre-cut image
+# carrying a `sha-*` tag would be KEPT by these rules, because "promoted" outranks "old".
+# If such an image ever reappears, removing it is a decision for Hugo, not for this cron.
+# CUT_TAG below is a canary for that reasoning, not a deletion criterion: if the agreed cut
+# build is missing from the listing, the map is wrong and the job refuses to act at all.
+#
 # Deleting package versions is irreversible, and the untagged children of the RUNNING
 # image are indistinguishable from orphans, so the rules below are refusals, not
 # intentions. They are the safety argument, and none of them is optional.
@@ -29,6 +37,7 @@ on:
     paths:
       - ".github/workflows/registry-prune.yml"
       - ".github/scripts/prune_plan.py"
+      - ".github/scripts/confirm_deletable.py"
 
 permissions:
   contents: read
