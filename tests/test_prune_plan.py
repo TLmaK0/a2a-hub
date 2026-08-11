@@ -89,6 +89,21 @@ def test_an_unrecognised_tag_scheme_is_kept():
     assert "unrecognised" in reason_for(keep, 1)
 
 
+def test_paginated_listings_are_flattened():
+    """`gh api --paginate --slurp` yields one array per page, not one flat array."""
+    pages = [[version(1, ["sha-a"], 1)], [version(2, ["tree-b"], 400)]]
+    assert [v["id"] for v in prune_plan.flatten(pages)] == [1, 2]
+
+
+def test_a_flat_listing_is_left_alone():
+    flat = [version(1, ["sha-a"], 1)]
+    assert prune_plan.flatten(flat) == flat
+
+
+def test_an_empty_listing_does_not_crash_the_flattener():
+    assert prune_plan.flatten([]) == []
+
+
 def test_main_refuses_when_the_pinned_digest_is_absent(tmp_path, capsys):
     """A listing without the deployed digest is not the registry we think it is."""
     versions = tmp_path / "versions.json"

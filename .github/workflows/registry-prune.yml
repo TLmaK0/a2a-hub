@@ -67,7 +67,12 @@ jobs:
 
           # Fail closed on any API trouble: a 403/404 from `gh api` still writes JSON to
           # stdout, so "output is non-empty" proves nothing. Check the exit code.
-          if ! gh api "/users/${OWNER}/packages/container/${PKG}/versions?per_page=100" > versions.json; then
+          # --paginate, because one page is not the registry. Each merged PR adds three
+          # versions, so a single 100-item page stops being the whole truth in weeks, and a
+          # listing that silently ends at 100 would quietly stop protecting whatever fell
+          # off the end. --slurp returns one array PER PAGE; the plan flattens that.
+          if ! gh api --paginate --slurp \
+                 "/users/${OWNER}/packages/container/${PKG}/versions?per_page=100" > versions.json; then
             echo "::error::Could not list package versions. Deleting nothing."
             exit 1
           fi

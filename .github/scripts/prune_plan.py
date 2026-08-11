@@ -21,6 +21,18 @@ import json
 import sys
 
 
+def flatten(payload):
+    """Accept either a flat listing or `gh api --paginate --slurp`'s list of pages.
+
+    `--slurp` returns one array per page, so a single truncated-looking list is not the
+    only shape this can arrive in. Guessing wrong here would silently shrink the world the
+    rules reason about.
+    """
+    if payload and isinstance(payload[0], list):
+        return [version for page in payload for version in page]
+    return payload
+
+
 def tags(version: dict) -> list[str]:
     return version.get("metadata", {}).get("container", {}).get("tags", []) or []
 
@@ -73,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.argv[1:6] if argv is None else argv[:5]
     )
     grace = int(grace_s)
-    versions = json.load(open(path))
+    versions = flatten(json.load(open(path)))
     now = datetime.datetime.now(datetime.timezone.utc)
 
     # No list of live trees is not "nothing is referenced", it is "we do not know".
