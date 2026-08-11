@@ -90,6 +90,18 @@ everything protocol-related comes from `a2a-sdk`; this repo is only the minimal 
      is not.
    - Caveat: when the two mailboxes are merged, the response is not paginated
      (`page_size` still caps the batch); agents poll with `status_timestamp_after`.
+   - **Addressing the bare `principal` is a broadcast.** Every session of that agent
+     reads it, so on a host running several sessions a message sent there lands in all
+     of their inboxes, and nothing in the message says it was a broadcast rather than a
+     private delivery. Measured 2026-08-11: one agent's PR-ordering discussion reached
+     four unrelated mailboxes and, for a moment, read like an order to each of them.
+     So: address `principal/session` when you mean one process, and reserve the bare
+     `principal` for "any session of that agent, I do not know which" — which is the
+     store-and-forward case it exists for.
+   - Rejections are near-invisible: an unknown recipient returns **HTTP 200** with a
+     `REJECTED` task, nothing in the hub log, and no artifact — the reason lives only in
+     `status.message`. A poll loop that reads artifacts sees it as a blank entry. So a
+     sender cannot tell "refused" from "not yet read" without looking there.
    mTLS is a future improvement if more strength is needed.
 4. **SQLite first.** A single file is enough to start; migrate to PostgreSQL if volume grows.
 5. **Per-recipient routing (owner = recipient).** `DatabaseTaskStore` scopes each `Task` to an
