@@ -19,6 +19,8 @@ By default that would be the caller, but in a mailbox the owner must be the
 
 from __future__ import annotations
 
+import logging
+
 from google.protobuf.json_format import MessageToDict
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -29,6 +31,14 @@ from a2a.types.a2a_pb2 import Part, Role, Task, TaskState, TaskStatus
 
 from a2a_hub.auth import is_valid_identity
 
+
+#: Rejections are logged here. A refused delivery used to leave no trace at all:
+#: the transport succeeded, so the access log said 200, and the REJECTED task was
+#: stored under the sender — correct, so a bad address does not leak into someone
+#: else's mailbox, but it left whoever operates the hub with no signal whatsoever.
+#: On 2026-08-11 a message was believed sent and never arrived, and from the hub side
+#: "never sent", "refused" and "delivered but unread" were indistinguishable.
+logger = logging.getLogger(__name__)
 
 #: Metadata key (on the message or the request) holding the recipient agent.
 RECIPIENT_KEY = "recipient"
@@ -93,6 +103,7 @@ class HubAgentExecutor(AgentExecutor):
         await self._ensure_task(context, event_queue)
 
         if context.message is None:
+            logger.warning("delivery rejected: no message, from sender %r", sender)
             await updater.reject(
                 message=self._notice(updater, "no message to deliver"),
             )
@@ -100,6 +111,9 @@ class HubAgentExecutor(AgentExecutor):
 
         recipient = _extract_recipient(context)
         if not recipient:
+            logger.warning(
+                "delivery rejected: no recipient metadata, from sender %r", sender
+            )
             await updater.reject(
                 message=self._notice(
                     updater,
@@ -109,6 +123,14 @@ class HubAgentExecutor(AgentExecutor):
             return
 
         if not is_valid_identity(recipient, self._known_agents):
+            # Sender and attempted recipient, and nothing else: enough to answer "is
+            # anyone misaddressing me?" without logging message bodies, which are
+            # other agents' content.
+            logger.warning(
+                "delivery rejected: unknown recipient %r, from sender %r",
+                recipient,
+                sender,
+            )
             await updater.reject(
                 message=self._notice(
                     updater, f"unknown recipient: {recipient!r}"

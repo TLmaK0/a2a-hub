@@ -6,6 +6,8 @@ guarantee per-agent isolation.
 
 from __future__ import annotations
 
+import logging
+
 from conftest import (
     AGENT_B,
     IDENT_A,
@@ -218,3 +220,67 @@ async def test_a_malformed_page_token_restarts_instead_of_failing(client):
 
     assert response.status_code == 200
     assert response.json()["result"]["tasks"]
+
+
+# --- rejections must leave a trace for whoever operates the hub ---------------
+
+
+async def test_an_unknown_recipient_is_logged_with_sender_and_recipient(client, caplog):
+    """The check that failed on 2026-08-11: grepping the log found nothing.
+
+    The transport succeeds, so the access log says 200, and the REJECTED task is
+    stored under the sender — right, but it leaves the operator unable to tell
+    "never sent" from "refused" from "delivered but unread".
+    """
+    with caplog.at_level(logging.WARNING, logger="a2a_hub.executor"):
+        response = await rpc(
+            client,
+            "SendMessage",
+            send_message_params("nobody-here/at-all"),
+            token=TOKEN_A,
+        )
+
+    assert response.status_code == 200  # the transport really did succeed
+    assert response.json()["result"]["task"]["status"]["state"] == "TASK_STATE_REJECTED"
+
+    # What the issue asks for: sender and attempted recipient, at WARNING.
+    rejections = [r for r in caplog.records if "rejected" in r.message]
+    assert len(rejections) == 1
+    logged = rejections[0].getMessage()
+    assert "nobody-here/at-all" in logged
+    assert IDENT_A in logged
+    assert rejections[0].levelname == "WARNING"
+
+
+async def test_a_missing_recipient_is_logged_too(client, caplog):
+    """Misaddressing includes forgetting the address entirely."""
+    with caplog.at_level(logging.WARNING, logger="a2a_hub.executor"):
+        await rpc(
+            client,
+            "SendMessage",
+            send_message_params(None, with_recipient=False),
+            token=TOKEN_A,
+        )
+
+    assert any("no recipient metadata" in r.getMessage() for r in caplog.records)
+
+
+async def test_a_successful_delivery_logs_no_warning(client, caplog):
+    """Otherwise the signal drowns: a warning per delivery is a warning per nothing."""
+    with caplog.at_level(logging.WARNING, logger="a2a_hub.executor"):
+        await rpc(client, "SendMessage", send_message_params(IDENT_B), token=TOKEN_A)
+
+    assert [r for r in caplog.records if "rejected" in r.message] == []
+
+
+async def test_the_log_never_carries_the_message_body(client, caplog):
+    """Bodies are other agents' content; the addresses are enough to diagnose."""
+    with caplog.at_level(logging.WARNING, logger="a2a_hub.executor"):
+        await rpc(
+            client,
+            "SendMessage",
+            send_message_params("nobody-here/at-all", text="secret payload"),
+            token=TOKEN_A,
+        )
+
+    assert all("secret payload" not in r.getMessage() for r in caplog.records)
