@@ -1,0 +1,135 @@
+name: registry prune
+
+# Deletes stale image versions automatically.
+#
+# WHY THIS EXISTS — and it is privacy, not disk space. When this repo was published, the
+# git history was sanitised (a private host name and references to an old secret were
+# removed). Images built BEFORE that sanitisation still contain those strings inside a
+# layer, so while they exist, what was removed from the public repo is still downloadable.
+# A report does not fix that; deleting does.
+#
+# Deleting package versions is irreversible, and the untagged children of the RUNNING
+# image are indistinguishable from orphans, so the rules below are refusals, not
+# intentions. They are the safety argument, and none of them is optional.
+
+on:
+  schedule:
+    # Weekly, off-peak, not on :00.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      grace_days:
+        description: "Delete tree-* versions older than this many days"
+        required: false
+        default: "30"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  prune:
+    name: prune stale versions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve, then delete
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GRACE_DAYS: ${{ inputs.grace_days || '30' }}
+          # Arming gate: until this repository variable is exactly "true", the job resolves
+          # and reports what it WOULD delete and deletes nothing. That makes the first run
+          # a dry run whose list can be authorised once; after the variable is set the job
+          # deletes on its own, with no further approval.
+          ARMED: ${{ vars.REGISTRY_PRUNE_ARMED }}
+          OWNER: ${{ github.repository_owner }}
+          PKG: a2a-hub
+          # Sanitisation cut agreed with Hugo: this build and anything newer is kept.
+          CUT_TAG: sha-e4fa405a7f1a39055589464c655f575b5100942f
+        run: |
+          set -euo pipefail
+
+          # Fail closed on any API trouble: a 403/404 from `gh api` still writes JSON to
+          # stdout, so "output is non-empty" proves nothing. Check the exit code.
+          if ! gh api "/users/${OWNER}/packages/container/${PKG}/versions?per_page=100" > versions.json; then
+            echo "::error::Could not list package versions. Deleting nothing."
+            exit 1
+          fi
+
+          python3 - "$GRACE_DAYS" "$CUT_TAG" "${ARMED:-}" <<'PY' > plan.txt
+          import json, sys, datetime
+
+          grace, cut_tag, armed = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+          versions = json.load(open("versions.json"))
+          now = datetime.datetime.now(datetime.timezone.utc)
+
+          def tags(v):
+              return v.get("metadata", {}).get("container", {}).get("tags", []) or []
+
+          def age(v):
+              return (now - datetime.datetime.fromisoformat(
+                  v["created_at"].replace("Z", "+00:00"))).days
+
+          # The cut is expressed by TAG, never by timestamp. The two untagged children of
+          # the cut build were created one second BEFORE its index, so "delete anything
+          # older than the cut's timestamp" would delete parts of the image that must be
+          # kept. Measured, not hypothetical.
+          cut = next((v for v in versions if cut_tag in tags(v)), None)
+
+          delete, keep = [], []
+          for v in versions:
+              t, reason = tags(v), None
+              if not t:
+                  reason = "untagged: a child of some index, indistinguishable from the running image's own children"
+              elif any(x == "latest" or x.startswith("sha-") for x in t):
+                  reason = "promoted: reachable from main, and anything deployed necessarily carries a sha-* tag"
+              elif all(x.startswith("tree-") for x in t):
+                  if age(v) >= grace:
+                      delete.append((v["id"], t, age(v), "tree-* only, past the grace period"))
+                      continue
+                  reason = f"tree-* only but {age(v)}d old, inside the {grace}d grace period"
+              else:
+                  reason = "unrecognised tag scheme: unknown means keep"
+              keep.append((v["id"], t, age(v), reason))
+
+          print(f"ARMED={armed!r}  cut={cut_tag}  cut_version={'found' if cut else 'MISSING'}")
+          print(f"total={len(versions)} keep={len(keep)} delete={len(delete)}")
+          print("--- DELETE ---")
+          for vid, t, a, why in delete:
+              print(f"{vid}\t{','.join(t)}\t{a}d\t{why}")
+          print("--- KEEP ---")
+          for vid, t, a, why in keep:
+              print(f"{vid}\t{','.join(t) or '(untagged)'}\t{a}d\t{why}")
+
+          # If the agreed cut build is not in the registry at all, something is wrong with
+          # our assumptions about this package. Refuse rather than reason from a bad map.
+          if cut is None:
+              sys.exit("cut build not found in the registry")
+          PY
+
+          cat plan.txt >> "$GITHUB_STEP_SUMMARY"
+          cat plan.txt
+
+          ids=$(awk '/^--- DELETE ---$/{f=1;next} /^--- KEEP ---$/{f=0} f{print $1}' plan.txt)
+
+          if [ -z "$ids" ]; then
+            echo "Nothing to delete."
+            exit 0
+          fi
+
+          if [ "${ARMED:-}" != "true" ]; then
+            echo "::notice::NOT ARMED — this is the dry run. The list above is what would be"\
+                 "deleted. Set the repository variable REGISTRY_PRUNE_ARMED=true to authorise"\
+                 "it, after which this job deletes automatically without asking again."
+            exit 0
+          fi
+
+          # One at a time, checking the exit code, aborting on the first failure rather
+          # than pressing on through a partially broken state.
+          for id in $ids; do
+            if gh api -X DELETE "/users/${OWNER}/packages/container/${PKG}/versions/${id}"; then
+              echo "deleted $id"
+            else
+              echo "::error::Failed to delete ${id}. Stopping here; nothing further is attempted."
+              exit 1
+            fi
+          done
