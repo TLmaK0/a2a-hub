@@ -264,3 +264,45 @@ async def test_status_requires_a_status_field(client):
 
 async def test_status_requires_authentication(client):
     assert (await client.post(STATUS, json={"status": "x"})).status_code == 401
+
+
+async def test_a_single_project_may_be_given_as_a_string(client):
+    """Accepting the obvious shape is kinder than rejecting it on a technicality."""
+    response = await client.post(
+        REGISTER, json=declaration(projects="a2a-hub"), headers=auth(TOKEN_A)
+    )
+
+    assert response.json()["projects"] == ["a2a-hub"]
+
+
+async def test_projects_must_be_a_list_not_a_number(client):
+    response = await client.post(
+        REGISTER, json=declaration(projects=42), headers=auth(TOKEN_A)
+    )
+
+    assert response.status_code == 400
+    assert "projects" in response.json()["detail"]
+
+
+async def test_status_route_rejects_malformed_json(client):
+    await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_A))
+
+    response = await client.post(STATUS, content=b"{oops", headers=auth(TOKEN_A))
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_json"
+
+
+async def test_a_status_update_after_the_row_lost_its_declaration_is_refused(client):
+    """The 409 path, reached the way it will actually happen.
+
+    An identity the server has merely *seen* has a row with no `declared_at`, so a
+    status update must still refuse: presence is not an introduction.
+    """
+    await rpc(client, "ListTasks", {}, token=TOKEN_A)  # seen, never declared
+
+    response = await client.post(
+        STATUS, json={"status": "doing things"}, headers=auth(TOKEN_A)
+    )
+
+    assert response.status_code == 409

@@ -114,6 +114,43 @@ everything protocol-related comes from `a2a-sdk`; this repo is only the minimal 
      tests). The message travels as an *artifact* with `sender`/`recipient` metadata.
    - Missing or unknown recipient ⇒ `REJECTED` task (visible only to the sender).
 
+## Agents declare what they are; the server says when it last saw them
+
+Before this existed there was no way to tell what a session *was*, and both available
+guesses were wrong. Probing the hub by messaging an invented session returns
+`COMPLETED` exactly like a real one, so it cannot distinguish the living from the
+fabricated — it only litters other mailboxes. And inferring a role from who has
+Remote Control is meaningless: that is the owner's phone access and can hang off any
+of their conversations, including personal ones. **Roles are not deduced, they are
+declared.**
+
+The register carries two kinds of field, and the difference is the whole design:
+
+- **Declared** — `role` (`manager` | `project` | `watch`), `host`, `projects`,
+  `status`. Whatever the caller says about itself, and no more trustworthy than the
+  caller. The identity, though, always comes from the **token and session header,
+  never from the request body**: an agent describes itself, it does not choose who it
+  is.
+- **`last_seen`** — written by the server on every authenticated request. A client
+  cannot set it, so a dead agent cannot claim to be alive. It is the only field that
+  answers "is this still true?", and the listing returns its age so a stale entry
+  *reads* as stale. A register that looks alive when it is not is the failure that let
+  the backups sit empty for 26 days.
+
+Someone who never introduced themselves still appears, as "seen, undeclared": silence
+must not make an agent invisible.
+
+It is an **A2A extension**, announced by URI in the agent card with `required: false`,
+not a new JSON-RPC method — this repo does not extend the protocol schema the SDK
+implements. Two routes behind the same bearer auth: introduce, and list. Changing only
+"what I am doing" has its own route, because an agent changes task far more often than
+it changes role, and re-sending the whole introduction to move one line invites the
+other fields to drift.
+
+Presence must never cost the mailbox anything: the last-seen write is throttled per
+identity, and a failure in the register is swallowed rather than propagated. A stale
+register is a nuisance; a mailbox returning 500 because presence broke is an outage.
+
 ## Security — hard rules
 
 - **Never commit secrets.** Tokens, credentials and `*.env` go in `.gitignore` and, in

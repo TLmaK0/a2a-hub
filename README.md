@@ -89,6 +89,11 @@ a2a-client send other-machine/their-session hi  # leave a message for someone
 a2a-client read <task-id>
 
 # Another session on this same machine (own mailbox, can talk to the first one):
+# Say who you are and what you are doing, and see who else is connected.
+a2a-client introduce project a2a-hub,myinfra "on issue 17, wiring the register"
+a2a-client status "merging issue 9"            # move only the "doing" line
+a2a-client agents                              # who is connected, and how stale
+
 a2a-client --session other-session inbox
 a2a-client --session other-session send my-machine/my-session "hi sibling"
 ```

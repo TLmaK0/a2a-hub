@@ -22,6 +22,9 @@ CLI::
     a2a-client inbox [--json]
     a2a-client read <task-id>
     a2a-client send <recipient> <text...>
+    a2a-client introduce <role> <project[,project...]> <what you are doing...>
+    a2a-client status <what you are doing...>
+    a2a-client agents [--json]
     a2a-client [--session NAME] ...      # overrides A2A_HUB_SESSION
 """
 
@@ -29,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -165,6 +169,43 @@ class HubClient:
             raise ClientError(f"hub error: {message}")
         return payload["result"]
 
+    def _http(self, path: str, body: dict[str, Any] | None) -> dict[str, Any]:
+        """Call one of the register routes.
+
+        These are not JSON-RPC: the register is an announced A2A *extension*, so it
+        lives on its own paths behind the same bearer auth.
+        """
+        url = self.config.url.rstrip("/") + path
+        headers = {
+            "Content-Type": "application/json",
+            "A2A-Version": A2A_VERSION,
+            "Authorization": f"Bearer {self.config.token}",
+            "A2A-Session": self.config.session,
+        }
+        payload = self._transport(
+            url, json.dumps(body).encode() if body is not None else None, headers
+        )
+        if "error" in payload:
+            raise ClientError(f"hub error: {payload.get('detail', payload['error'])}")
+        return payload
+
+    def introduce(
+        self, role: str, host: str, projects: list[str], status: str
+    ) -> dict[str, Any]:
+        """Say who I am and what I am doing. Identity comes from the token."""
+        return self._http(
+            "/agents/register",
+            {"role": role, "host": host, "projects": projects, "status": status},
+        )
+
+    def set_status(self, status: str) -> dict[str, Any]:
+        """Move only the "what I am doing" line of an existing introduction."""
+        return self._http("/agents/status", {"status": status})
+
+    def agents(self) -> dict[str, Any]:
+        """Who else is connected, what they are, and when they were last seen."""
+        return self._http("/agents", None)
+
     def list_tasks(self, include_artifacts: bool = True) -> dict[str, Any]:
         """List the tasks waiting in *my* mailbox."""
         return self._rpc("ListTasks", {"includeArtifacts": include_artifacts})
@@ -201,6 +242,33 @@ def format_task(task: dict[str, Any]) -> str:
         ).strip()
         lines.append(f"    from {sender}: {text}")
     return "\n".join(lines)
+
+
+def format_agent(agent: dict[str, Any]) -> str:
+    """One line per agent, with the age up front.
+
+    The age leads because it is the only field the server vouches for: everything
+    else is what that agent said about itself, and a register that cannot go stale
+    has not been built yet.
+    """
+    age = agent.get("last_seen_seconds")
+    if age is None:
+        seen = "never seen"
+    elif age < 120:
+        seen = f"{age}s ago"
+    elif age < 7200:
+        seen = f"{age // 60}m ago"
+    else:
+        seen = f"{age // 3600}h ago"
+
+    if not agent.get("declared"):
+        return f"[{seen:>9}] {agent['identity']} (undeclared)"
+
+    projects = ",".join(agent.get("projects") or []) or "-"
+    return (
+        f"[{seen:>9}] {agent['identity']} {agent.get('role')} "
+        f"{projects} :: {agent.get('status') or '-'}"
+    )
 
 
 def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
@@ -247,6 +315,36 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
                 )
                 for task in result.get("tasks", []):
                     print(format_task(task))
+
+        elif command == "introduce":
+            # host is taken from the machine, not typed: one less thing to get wrong,
+            # and a wrong host in a register is worse than no host.
+            if len(args) < 3:
+                raise ClientError(
+                    "usage: a2a-client introduce <role> <project[,project...]> "
+                    "<what you are doing...>"
+                )
+            result = hub.introduce(
+                role=args[1],
+                host=socket.gethostname(),
+                projects=[p for p in args[2].split(",") if p],
+                status=" ".join(args[3:]),
+            )
+            print(f"introduced {result['identity']} as {result['role']}")
+
+        elif command == "status":
+            if len(args) < 2:
+                raise ClientError("usage: a2a-client status <what you are doing...>")
+            result = hub.set_status(" ".join(args[1:]))
+            print(f"status of {result['identity']}: {result['status']}")
+
+        elif command == "agents":
+            result = hub.agents()
+            if "--json" in args:
+                print(json.dumps(result, indent=2))
+            else:
+                for agent in result.get("agents", []):
+                    print(format_agent(agent))
 
         elif command == "read":
             if len(args) < 2:

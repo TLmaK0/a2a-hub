@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 
 import httpx
 import pytest
@@ -16,9 +17,14 @@ from a2a_hub.client import (
     ClientConfig,
     ClientError,
     HubClient,
+    format_agent,
     format_task,
     main,
 )
+
+
+def _config() -> ClientConfig:
+    return ClientConfig(url="https://hub.test/", agent="a", token="t", session="s1")
 from conftest import AGENT_A, AGENT_B, IDENT_A, IDENT_B, TOKEN_A, TOKEN_B
 
 
@@ -319,3 +325,99 @@ def test_format_task_with_artifact():
     )
     assert "from a: hi" in text
     assert "2026-08-08 10:51:11" in text
+
+
+# --- register commands -------------------------------------------------------
+
+
+def test_introduce_sends_role_projects_and_status(monkeypatch, capsys):
+    """The host is taken from the machine: one less field to get wrong by hand."""
+    seen = {}
+
+    def transport(url, body, headers):
+        seen["url"] = url
+        seen["body"] = json.loads(body)
+        return {"identity": "ns/a", "role": "project", "host": "h",
+                "projects": ["a2a-hub"], "status": "on issue 17"}
+
+    monkeypatch.setattr(socket, "gethostname", lambda: "ns3073844")
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["introduce", "project", "a2a-hub,myinfra", "on", "issue", "17"], hub) == 0
+
+    assert seen["url"].endswith("/agents/register")
+    assert seen["body"]["role"] == "project"
+    assert seen["body"]["projects"] == ["a2a-hub", "myinfra"]
+    assert seen["body"]["status"] == "on issue 17"
+    assert seen["body"]["host"] == "ns3073844"
+    assert "introduced ns/a" in capsys.readouterr().out
+
+
+def test_status_moves_only_the_status(capsys):
+    def transport(url, body, headers):
+        assert url.endswith("/agents/status")
+        assert json.loads(body) == {"status": "merging issue 9"}
+        return {"identity": "ns/a", "status": "merging issue 9"}
+
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["status", "merging", "issue", "9"], hub) == 0
+    assert "merging issue 9" in capsys.readouterr().out
+
+
+def test_agents_lists_who_is_connected(capsys):
+    def transport(url, body, headers):
+        assert url.endswith("/agents")
+        assert body is None  # a GET, not a POST
+        return {"agents": [
+            {"identity": "ns/a", "role": "manager", "projects": ["x"],
+             "status": "watching", "declared": True, "last_seen_seconds": 30},
+            {"identity": "ns/b", "declared": False, "last_seen_seconds": 10800},
+        ]}
+
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["agents"], hub) == 0
+    out = capsys.readouterr().out
+    assert "ns/a manager x :: watching" in out
+    assert "(undeclared)" in out
+    assert "3h ago" in out
+
+
+def test_register_commands_report_usage_when_incomplete(capsys):
+    hub = HubClient(_config(), transport=lambda *a: {})
+
+    assert main(["introduce", "project"], hub) == 1
+    assert main(["status"], hub) == 1
+    assert "usage" in capsys.readouterr().err
+
+
+def test_a_register_error_is_reported_not_swallowed(capsys):
+    def transport(url, body, headers):
+        return {"error": "not_registered", "detail": "register first"}
+
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["status", "doing things"], hub) == 1
+    assert "register first" in capsys.readouterr().err
+
+
+def test_format_agent_says_never_seen_when_it_never_was():
+    """A row with no timestamp must not render as if it were fresh."""
+    assert "never seen" in format_agent({"identity": "ns/x", "declared": False})
+
+
+def test_agents_json_output_is_the_raw_payload(capsys):
+    payload = {"agents": [{"identity": "ns/a", "declared": False,
+                           "last_seen_seconds": 5}]}
+    hub = HubClient(_config(), transport=lambda *a: payload)
+
+    assert main(["agents", "--json"], hub) == 0
+    assert json.loads(capsys.readouterr().out) == payload
+
+
+def test_format_agent_shows_minutes_between_two_and_one_hundred_twenty(capsys):
+    """The middle band exists so "45m ago" does not print as 2700s or 0h."""
+    assert "45m ago" in format_agent(
+        {"identity": "ns/x", "declared": False, "last_seen_seconds": 2700}
+    )
