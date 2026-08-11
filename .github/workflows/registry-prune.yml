@@ -55,56 +55,7 @@ jobs:
             exit 1
           fi
 
-          python3 - "$GRACE_DAYS" "$CUT_TAG" "${ARMED:-}" <<'PY' > plan.txt
-          import json, sys, datetime
-
-          grace, cut_tag, armed = int(sys.argv[1]), sys.argv[2], sys.argv[3]
-          versions = json.load(open("versions.json"))
-          now = datetime.datetime.now(datetime.timezone.utc)
-
-          def tags(v):
-              return v.get("metadata", {}).get("container", {}).get("tags", []) or []
-
-          def age(v):
-              return (now - datetime.datetime.fromisoformat(
-                  v["created_at"].replace("Z", "+00:00"))).days
-
-          # The cut is expressed by TAG, never by timestamp. The two untagged children of
-          # the cut build were created one second BEFORE its index, so "delete anything
-          # older than the cut's timestamp" would delete parts of the image that must be
-          # kept. Measured, not hypothetical.
-          cut = next((v for v in versions if cut_tag in tags(v)), None)
-
-          delete, keep = [], []
-          for v in versions:
-              t, reason = tags(v), None
-              if not t:
-                  reason = "untagged: a child of some index, indistinguishable from the running image's own children"
-              elif any(x == "latest" or x.startswith("sha-") for x in t):
-                  reason = "promoted: reachable from main, and anything deployed necessarily carries a sha-* tag"
-              elif all(x.startswith("tree-") for x in t):
-                  if age(v) >= grace:
-                      delete.append((v["id"], t, age(v), "tree-* only, past the grace period"))
-                      continue
-                  reason = f"tree-* only but {age(v)}d old, inside the {grace}d grace period"
-              else:
-                  reason = "unrecognised tag scheme: unknown means keep"
-              keep.append((v["id"], t, age(v), reason))
-
-          print(f"ARMED={armed!r}  cut={cut_tag}  cut_version={'found' if cut else 'MISSING'}")
-          print(f"total={len(versions)} keep={len(keep)} delete={len(delete)}")
-          print("--- DELETE ---")
-          for vid, t, a, why in delete:
-              print(f"{vid}\t{','.join(t)}\t{a}d\t{why}")
-          print("--- KEEP ---")
-          for vid, t, a, why in keep:
-              print(f"{vid}\t{','.join(t) or '(untagged)'}\t{a}d\t{why}")
-
-          # If the agreed cut build is not in the registry at all, something is wrong with
-          # our assumptions about this package. Refuse rather than reason from a bad map.
-          if cut is None:
-              sys.exit("cut build not found in the registry")
-          PY
+          python3 .github/scripts/prune_plan.py versions.json "$GRACE_DAYS" "$CUT_TAG" > plan.txt
 
           cat plan.txt >> "$GITHUB_STEP_SUMMARY"
           cat plan.txt
