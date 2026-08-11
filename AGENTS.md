@@ -150,6 +150,32 @@ other fields to drift.
 Presence must never cost the mailbox anything: the last-seen write is throttled per
 identity, and a failure in the register is swallowed rather than propagated. A stale
 register is a nuisance; a mailbox returning 500 because presence broke is an outage.
+## Dependencies install themselves; nothing touches the host
+
+Hugo, 2026-08-11: *"no quiero ningun cambio mas sin mi consentimiento. Los ejecutables se
+instalan con el servicio que lo necesita: si son los tests, los tests; si es la app, la app.
+Sin symlink, se instalan en el PATH del usuario"*.
+
+- **No `sudo`, and nothing outside your `$HOME` and this repo.** Not `/usr/local/bin`, not
+  `/etc`, not `/opt`, no system packages.
+- **Whatever needs a binary installs it, as part of itself.** If a test needs it, the test
+  installs it; if the app needs it, the app does. Then it travels in the repo, it works in
+  CI and on any machine, and it does not depend on someone remembering they once poked a
+  host.
+- **Never a symlink** from a system path. Into the user's `PATH`, if anywhere.
+- If you think you need to touch the host, **ask and wait**. Asking and doing at the same
+  time is not asking.
+
+The case behind it, so it does not read as bureaucracy: an agent ran
+`sudo ln -sf /usr/local/bin/<tool>` pointing at a binary **inside its own session
+scratchpad**. The day `/tmp` is cleaned, the check that uses it stops finding the tool,
+excuses itself and **exits 0** — green without having tested anything. A fix applied to a
+host is invisible, does not travel, and expires without saying so. It is the same family as
+every other trap recorded here: something that stopped working and did not tell anyone.
+
+Same line, same day: **nothing that leaves the machine towards Hugo or a third party**
+(mail, webhook, message) is left switched on pending approval. It is left **off**, and
+approval is requested.
 
 ## Security — hard rules
 
