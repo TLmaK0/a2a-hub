@@ -143,6 +143,19 @@ jobs:
           echo "Promoted (same digest, no rebuild):"
           docker buildx imagetools inspect "${IMAGE}:sha-${GITHUB_SHA}" | head -5
 
+      # Publish which digest is now the validated one, on a branch anyone can read without
+      # credentials. The deployment repo cannot read this private package (its token is
+      # scoped to itself), but this repo is public — so this is what lets the deploy chain
+      # resolve the image with no secret at all.
+      - name: Record the promoted digest publicly
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMOTED_BRANCH: promoted
+        run: |
+          digest="$(docker buildx imagetools inspect "${IMAGE}:sha-${GITHUB_SHA}" \
+                      --format '{{.Manifest.Digest}}')"
+          .github/scripts/record_promoted.sh "${PROMOTED_BRANCH}" "${GITHUB_SHA}" "${digest}"
+
       # Optional: tell a deployment repo that a new image is available. No-op unless
       # both the INFRA_REPO variable (owner/repo) and the INFRA_DISPATCH_TOKEN secret
       # (a fine-grained PAT with Contents: write on that repo) are configured.
