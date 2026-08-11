@@ -56,7 +56,21 @@ registrations = Table(
     Column("status", String(MAX_FIELD), nullable=False, server_default=""),
     Column("declared_at", DateTime(timezone=True), nullable=True),
     Column("last_seen", DateTime(timezone=True), nullable=True),
+    # Retired rather than deleted: "this was here and was withdrawn at T" is
+    # information, silently vanishing is not.
+    Column("retired_at", DateTime(timezone=True), nullable=True),
 )
+
+#: A declaration that replaces a different agent's, made within this window, is the
+#: fingerprint of two processes sharing one session. Wide enough to catch the real
+#: case (two agents registering minutes apart), short enough that an agent updating
+#: its own introduction hours later is not flagged.
+REUSE_WINDOW_SECONDS = 900
+
+#: How recently another manager must have been seen to be worth warning about. A
+#: manager that has not called in an hour is probably gone, and warning about it
+#: would train people to ignore the warning.
+MANAGER_WINDOW_SECONDS = 3600
 
 
 def _now() -> datetime.datetime:
@@ -148,10 +162,17 @@ class AgentRegistry:
             await conn.execute(statement)
         self._last_write[identity] = now
 
-    async def declare(self, identity: str, declaration: dict) -> None:
-        """Store what ``identity`` says it is. Identity comes from the token."""
+    async def declare(self, identity: str, declaration: dict) -> list[str]:
+        """Store what ``identity`` says it is, and report anything suspicious.
+
+        Returns warnings rather than refusing: a handover legitimately overlaps two
+        managers, and a session may legitimately be reused. What must never happen is
+        that either passes unremarked, because the register is then quietly wrong
+        about the one question it exists to answer.
+        """
         await self.create_schema()
         now = _now()
+        warnings = await self._warnings_for(identity, declaration, now)
         values = {
             "identity": identity,
             "role": declaration["role"],
@@ -168,6 +189,58 @@ class AgentRegistry:
         )
         async with self._engine.begin() as conn:
             await conn.execute(statement)
+        return warnings
+
+    async def _warnings_for(
+        self, identity: str, declaration: dict, now: datetime.datetime
+    ) -> list[str]:
+        """Two things that are legal, surprising, and invisible today."""
+        warnings: list[str] = []
+        async with self._engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    select(registrations).where(registrations.c.retired_at.is_(None))
+                )
+            ).mappings().all()
+
+        for row in rows:
+            if row["identity"] == identity:
+                # Someone else's declaration sitting in the row we are about to take
+                # over: two processes sharing one session, which is exactly how the
+                # manager's entry was silently replaced on 2026-08-11.
+                age = _age_seconds(row["declared_at"], now)
+                changed = (
+                    row["role"] != declaration["role"]
+                    or json.loads(row["projects"] or "[]") != declaration["projects"]
+                )
+                if changed and age is not None and age < REUSE_WINDOW_SECONDS:
+                    warnings.append(
+                        f"this identity was declared {age}s ago as "
+                        f"{row['role'] or '?'} on {json.loads(row['projects'] or '[]')}; "
+                        "two processes may be sharing one session — check A2A_HUB_SESSION"
+                    )
+                continue
+
+            if declaration["role"] == "manager" and row["role"] == "manager":
+                age = _age_seconds(row["last_seen"], now)
+                if age is not None and age < MANAGER_WINDOW_SECONDS:
+                    warnings.append(
+                        f"another manager is already registered: {row['identity']}, "
+                        f"seen {age}s ago"
+                    )
+        return warnings
+
+    async def retire(self, identity: str) -> bool:
+        """Withdraw a registration without losing that it existed."""
+        await self.create_schema()
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                registrations.update()
+                .where(registrations.c.identity == identity)
+                .where(registrations.c.retired_at.is_(None))
+                .values(retired_at=_now())
+            )
+            return result.rowcount > 0
 
     async def update_status(self, identity: str, status: str) -> str:
         """Change only "what I am doing", leaving the rest of the introduction.
@@ -196,7 +269,7 @@ class AgentRegistry:
                 )
         return text
 
-    async def list_agents(self) -> list[dict]:
+    async def list_agents(self, include_retired: bool = False) -> list[dict]:
         """Every known identity, most recently seen first, with ages.
 
         Ages are computed at read time and returned alongside the timestamps: a
@@ -205,12 +278,11 @@ class AgentRegistry:
         bare list of names looks alive whatever its age.
         """
         await self.create_schema()
+        query = select(registrations).order_by(registrations.c.last_seen.desc())
+        if not include_retired:
+            query = query.where(registrations.c.retired_at.is_(None))
         async with self._engine.connect() as conn:
-            rows = (
-                await conn.execute(
-                    select(registrations).order_by(registrations.c.last_seen.desc())
-                )
-            ).mappings().all()
+            rows = (await conn.execute(query)).mappings().all()
 
         now = _now()
         agents = []
@@ -229,6 +301,7 @@ class AgentRegistry:
                     "declared_at": _isoformat(declared_at),
                     "last_seen": _isoformat(last_seen),
                     "last_seen_seconds": _age_seconds(last_seen, now),
+                    "retired_at": _isoformat(row["retired_at"]),
                 }
             )
         return agents

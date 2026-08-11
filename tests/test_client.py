@@ -421,3 +421,60 @@ def test_format_agent_shows_minutes_between_two_and_one_hundred_twenty(capsys):
     assert "45m ago" in format_agent(
         {"identity": "ns/x", "declared": False, "last_seen_seconds": 2700}
     )
+
+
+def test_introduce_refuses_a_session_from_the_shared_config_file(capsys):
+    """Where the manager's mistake became someone else's overwritten row."""
+    config = ClientConfig(
+        url="https://hub.test/", agent="a", token="t", session="claude-main",
+        session_from_shared_file=True,
+    )
+    hub = HubClient(config, transport=lambda *a: {})
+
+    assert main(["introduce", "project", "x", "doing things"], hub) == 1
+    err = capsys.readouterr().err
+    assert "shared config file" in err
+    assert "A2A_HUB_SESSION" in err
+
+
+def test_introduce_proceeds_when_the_session_was_set_for_this_process():
+    sent = {}
+
+    def transport(url, body, headers):
+        sent["url"] = url
+        return {"identity": "ns/a", "role": "project"}
+
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["introduce", "project", "x", "doing things"], hub) == 0
+    assert sent["url"].endswith("/agents/register")
+
+
+def test_introduce_prints_warnings_it_gets_back(capsys):
+    def transport(url, body, headers):
+        return {"identity": "ns/a", "role": "manager",
+                "warnings": ["another manager is already registered: ns/b, seen 5s ago"]}
+
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["introduce", "manager", "x", "doing things"], hub) == 0
+    assert "another manager is already registered" in capsys.readouterr().err
+
+
+def test_retire_withdraws_the_registration(capsys):
+    def transport(url, body, headers):
+        assert url.endswith("/agents/retire")
+        return {"identity": "ns/a", "retired": True}
+
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["retire"], hub) == 0
+    assert "retired ns/a" in capsys.readouterr().out
+
+
+def test_the_session_source_is_read_from_the_environment(monkeypatch, tmp_path):
+    """A session exported for this process is this agent's; one from the file is not."""
+    env = {"A2A_HUB_URL": "https://h/", "A2A_HUB_AGENT": "a",
+           "A2A_HUB_TOKEN": "t", "A2A_HUB_SESSION": "mine"}
+    config = ClientConfig.load(environ=env, config_path=tmp_path / "absent.env")
+    assert config.session_from_shared_file is False

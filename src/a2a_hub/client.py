@@ -24,6 +24,7 @@ CLI::
     a2a-client send <recipient> <text...>
     a2a-client introduce <role> <project[,project...]> <what you are doing...>
     a2a-client status <what you are doing...>
+    a2a-client retire
     a2a-client agents [--json]
     a2a-client [--session NAME] ...      # overrides A2A_HUB_SESSION
 """
@@ -86,6 +87,9 @@ class ClientConfig:
     agent: str
     token: str
     session: str
+    #: True when the session was read from the shared config file rather than set
+    #: for this process. Registering under a shared session is refused.
+    session_from_shared_file: bool = False
 
     @property
     def identity(self) -> str:
@@ -120,11 +124,17 @@ class ClientConfig:
             raise ClientError(
                 f"missing {', '.join(missing)} (set them in the environment or {path})"
             )
+        # Where the session came from decides whether registering under it is safe:
+        # the config file is shared by every process on the host, so a session read
+        # from it is not this agent's identity, it is the host's default. Registering
+        # under it silently overwrites whoever registered last — which is exactly how
+        # a manager's entry was replaced by another agent on 2026-08-11.
         return cls(
             url=merged["A2A_HUB_URL"],
             agent=merged["A2A_HUB_AGENT"],
             token=merged["A2A_HUB_TOKEN"],
             session=merged["A2A_HUB_SESSION"],
+            session_from_shared_file=not (env.get("A2A_HUB_SESSION") or "").strip(),
         )
 
 
@@ -201,6 +211,10 @@ class HubClient:
     def set_status(self, status: str) -> dict[str, Any]:
         """Move only the "what I am doing" line of an existing introduction."""
         return self._http("/agents/status", {"status": status})
+
+    def retire(self) -> dict[str, Any]:
+        """Withdraw my registration. Retired, not deleted."""
+        return self._http("/agents/retire", {})
 
     def agents(self) -> dict[str, Any]:
         """Who else is connected, what they are, and when they were last seen."""
@@ -317,6 +331,17 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
                     print(format_task(task))
 
         elif command == "introduce":
+            if hub.config.session_from_shared_file:
+                print(
+                    f"refusing to register as {hub.config.identity!r}: that session "
+                    "comes from the shared config file, not from this agent.\n"
+                    "Every process on this host that does not set its own session "
+                    "reads the same value, so registering under it overwrites "
+                    "whoever registered last.\n"
+                    "Set A2A_HUB_SESSION (note the HUB), or pass --session <name>.",
+                    file=sys.stderr,
+                )
+                return 1
             # host is taken from the machine, not typed: one less thing to get wrong,
             # and a wrong host in a register is worse than no host.
             if len(args) < 3:
@@ -331,12 +356,18 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
                 status=" ".join(args[3:]),
             )
             print(f"introduced {result['identity']} as {result['role']}")
+            for warning in result.get("warnings", []):
+                print(f"warning: {warning}", file=sys.stderr)
 
         elif command == "status":
             if len(args) < 2:
                 raise ClientError("usage: a2a-client status <what you are doing...>")
             result = hub.set_status(" ".join(args[1:]))
             print(f"status of {result['identity']}: {result['status']}")
+
+        elif command == "retire":
+            result = hub.retire()
+            print(f"retired {result['identity']}")
 
         elif command == "agents":
             result = hub.agents()

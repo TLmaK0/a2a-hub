@@ -306,3 +306,107 @@ async def test_a_status_update_after_the_row_lost_its_declaration_is_refused(cli
     )
 
     assert response.status_code == 409
+
+
+RETIRE = "/agents/retire"
+
+
+async def test_a_registration_can_be_withdrawn(client):
+    """The manager could not undo a wrong entry; now they can."""
+    await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_A))
+
+    retired = await client.post(RETIRE, headers=auth(TOKEN_A))
+    assert retired.status_code == 200
+
+    listed = (await client.get(LIST, headers=auth(TOKEN_B))).json()["agents"]
+    assert IDENT_A not in [a["identity"] for a in listed]
+
+
+async def test_a_withdrawn_registration_is_kept_not_deleted(client):
+    """"This was here and was withdrawn at T" is information; vanishing is not."""
+    await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_A))
+    await client.post(RETIRE, headers=auth(TOKEN_A))
+
+    listed = (await client.get(LIST + "?retired=true", headers=auth(TOKEN_A))).json()
+    entry = find(listed["agents"], IDENT_A)
+
+    assert entry["retired_at"] is not None
+    assert entry["role"] == "manager"  # what it claimed survives the withdrawal
+
+
+async def test_retiring_twice_is_refused(client):
+    await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_A))
+    await client.post(RETIRE, headers=auth(TOKEN_A))
+
+    assert (await client.post(RETIRE, headers=auth(TOKEN_A))).status_code == 409
+
+
+async def test_a_second_manager_is_warned_about_not_forbidden(client):
+    """A handover legitimately overlaps; it just must not pass unremarked."""
+    await client.post(REGISTER, json=declaration(role="manager"), headers=auth(TOKEN_A))
+
+    second = await client.post(
+        REGISTER, json=declaration(role="manager"), headers=auth(TOKEN_B)
+    )
+
+    assert second.status_code == 200
+    assert any(IDENT_A in w for w in second.json()["warnings"])
+
+
+async def test_no_manager_warning_when_there_is_only_one(client):
+    response = await client.post(
+        REGISTER, json=declaration(role="manager"), headers=auth(TOKEN_A)
+    )
+
+    assert "warnings" not in response.json()
+
+
+async def test_a_retired_manager_does_not_trigger_the_warning(client):
+    """Otherwise every handover warns forever and people learn to ignore it."""
+    await client.post(REGISTER, json=declaration(role="manager"), headers=auth(TOKEN_A))
+    await client.post(RETIRE, headers=auth(TOKEN_A))
+
+    second = await client.post(
+        REGISTER, json=declaration(role="manager"), headers=auth(TOKEN_B)
+    )
+
+    assert "warnings" not in second.json()
+
+
+async def test_taking_over_a_row_someone_else_just_declared_is_warned(client):
+    """The fingerprint of two processes sharing one session, invisible until now.
+
+    This is what silently replaced the manager's entry on 2026-08-11: a second agent
+    registered under the default session and overwrote a row that was not its own.
+    """
+    await client.post(
+        REGISTER,
+        json=declaration(role="manager", projects=["myinfra"]),
+        headers=auth(TOKEN_A),
+    )
+
+    # Same identity, different agent behind it, minutes later.
+    again = await client.post(
+        REGISTER,
+        json=declaration(role="project", projects=["analog-brain"]),
+        headers=auth(TOKEN_A),
+    )
+
+    warnings = again.json()["warnings"]
+    assert any("sharing one session" in w for w in warnings)
+    assert any("A2A_HUB_SESSION" in w for w in warnings)
+
+
+async def test_updating_your_own_introduction_unchanged_does_not_warn(client):
+    """Re-declaring the same thing is routine and must stay quiet."""
+    await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_A))
+
+    again = await client.post(
+        REGISTER, json=declaration(status="something else"), headers=auth(TOKEN_A)
+    )
+
+    assert "warnings" not in again.json()
+
+
+async def test_retire_requires_authentication(client):
+    assert (await client.post(RETIRE)).status_code == 401
