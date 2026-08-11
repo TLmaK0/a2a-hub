@@ -208,7 +208,7 @@ It has live clients (other agents). Treat the wire contract — required headers
 - Changing storage semantics can strand existing rows. Check what is already in the
   task store before changing how owners are resolved.
 
-## Two traps that have already cost us
+## Traps that have already cost us
 
 **Never pass text containing commands through an interpolated shell.** Issue and PR bodies,
 runbooks and commit messages routinely contain example commands. If that text reaches a
@@ -237,6 +237,29 @@ gh api "repos/OWNER/REPO/actions/runs?branch=BRANCH" --jq '.workflow_runs[] | "\
 
 Same shape as the other verification failures recorded here: the signal was adjacent to the
 question, not an answer to it.
+
+**A plan ages while you walk it.** Anything that lists first and acts afterwards is reasoning
+about a world that has already moved on. This repo publishes a package version on **every PR
+build**, so the registry gained three versions in half an hour between two measurements on
+2026-08-11 — the interval between drawing a list and reaching its last item is long enough for
+a PR to open, a build to publish or a merge to promote.
+
+For irreversible actions the list is a *proposal*, never an authorisation:
+
+- re-read the specific object immediately before acting on it, and
+- re-resolve what references it at that same moment, not when the plan was drawn, and
+- stop the whole run on the first surprise instead of pressing on.
+
+The manual registry purge on 2026-08-10 was done this way by hand — revalidate before each
+deletion — and `.github/workflows/registry-prune.yml` now does the same automatically. The
+weaker version of this rule, "the list was correct when I made it", is how a live image gets
+deleted.
+
+**A `paths:` filter that misses a file makes the gate silent about it.** When a workflow runs
+on PRs so that it gets exercised, every file its logic uses has to be in `paths:`. A job whose
+filter listed the plan script but not the confirmation script would not have run for a change
+that touched only the last check before an irreversible call — green, and about nothing. Same
+family as the stale-green trap above: check *what the gate executed*, not that it was green.
 
 ## Conventions
 
