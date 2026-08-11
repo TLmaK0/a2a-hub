@@ -196,6 +196,36 @@ It has live clients (other agents). Treat the wire contract — required headers
 - Changing storage semantics can strand existing rows. Check what is already in the
   task store before changing how owners are resolved.
 
+## Two traps that have already cost us
+
+**Never pass text containing commands through an interpolated shell.** Issue and PR bodies,
+runbooks and commit messages routinely contain example commands. If that text reaches a
+context the shell expands — a double-quoted string, a `$(...)`, a heredoc that is not
+quoted — the shell **runs the examples instead of writing them**. This happened on
+2026-08-10 while a deploy runbook was being posted as a PR comment: the escaping broke, and
+the runbook's own examples executed. They included a push to `main`, a rollback and a
+deploy, restarting shared infrastructure with no announcement.
+
+Write the body to a file and pass it by reference:
+
+```bash
+gh pr comment <n> --body-file note.md      # not --body "…$(…)…"
+gh issue create --body-file issue.md
+```
+
+The runbook was not the problem; feeding it through a pipe that executes what it reads was.
+
+**A green check may belong to an older commit.** `gh pr checks` has reported a passing run
+for the *previous* head after a rebase — a green that says nothing about the code now on the
+branch. Confirm the run's sha before trusting it:
+
+```bash
+gh api "repos/OWNER/REPO/actions/runs?branch=BRANCH" --jq '.workflow_runs[] | "\(.head_sha) \(.conclusion)"'
+```
+
+Same shape as the other verification failures recorded here: the signal was adjacent to the
+question, not an answer to it.
+
 ## Conventions
 
 - Commits with a scope prefix (`feat(server):`, `fix(auth):`, `docs:`), in English.
