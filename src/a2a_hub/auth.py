@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hmac
 import re
+from typing import Protocol
 
 from starlette.authentication import AuthCredentials, SimpleUser
 from starlette.requests import HTTPConnection, Request
@@ -110,6 +111,13 @@ def _extract_bearer(header: str | None) -> str | None:
     return credentials.strip()
 
 
+class SeenRecorder(Protocol):
+    """Anything that can record that an identity was just seen."""
+
+    async def touch(self, identity: str) -> None:  # pragma: no cover - interface
+        ...
+
+
 class BearerAuthMiddleware:
     """ASGI middleware that requires a bearer token except on public paths.
 
@@ -124,9 +132,18 @@ class BearerAuthMiddleware:
     machine can talk to each other while staying isolated from every other machine.
     """
 
-    def __init__(self, app: ASGIApp, registry: TokenRegistry) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        registry: TokenRegistry,
+        seen: "SeenRecorder | None" = None,
+    ) -> None:
         self.app = app
         self.registry = registry
+        # Stamping last-seen here, rather than in the register routes, is what makes
+        # the field trustworthy: it covers every authenticated request, so presence
+        # is observed by the server instead of asserted by the client.
+        self.seen = seen
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -173,6 +190,16 @@ class BearerAuthMiddleware:
 
         scope["user"] = SimpleUser(identity)
         scope["auth"] = AuthCredentials(["authenticated"])
+
+        if self.seen is not None:
+            # Presence must never be able to break the request it rides on: an agent
+            # losing its last-seen stamp is a stale register, while a mailbox that
+            # starts returning 500 because the register misbehaved is an outage.
+            try:
+                await self.seen.touch(identity)
+            except Exception:  # noqa: BLE001 - deliberately swallowed, see above
+                pass
+
         await self.app(scope, receive, send)
 
 

@@ -27,6 +27,8 @@ from a2a_hub.auth import (
 from a2a_hub.card import build_agent_card
 from a2a_hub.config import Settings
 from a2a_hub.executor import HubAgentExecutor
+from a2a_hub.registry import AgentRegistry
+from a2a_hub.routes_registry import build_registry_routes
 from a2a_hub.store import create_engine, create_task_store
 
 
@@ -53,6 +55,7 @@ def create_app(settings: Settings) -> Starlette:
 
     engine = create_engine(settings.db_url)
     task_store = create_task_store(engine)
+    agents = AgentRegistry(engine)
 
     agent_card = build_agent_card(settings.public_url, settings.rpc_url)
 
@@ -66,6 +69,7 @@ def create_app(settings: Settings) -> Starlette:
         Route(HEALTH_PATH, _healthz, methods=["GET"]),
         *create_agent_card_routes(agent_card),
         # RedactingContextBuilder keeps the bearer token out of the call context.
+        *build_registry_routes(agents),
         *create_jsonrpc_routes(
             handler, settings.rpc_url, context_builder=RedactingContextBuilder()
         ),
@@ -73,6 +77,8 @@ def create_app(settings: Settings) -> Starlette:
 
     @asynccontextmanager
     async def lifespan(_app: Starlette):
+        # Additive: creates the register table if absent, touches nothing existing.
+        await agents.create_schema()
         try:
             yield
         finally:
@@ -84,7 +90,7 @@ def create_app(settings: Settings) -> Starlette:
         middleware=[
             # Outermost: reject oversized bodies before anything reads them.
             Middleware(MaxBodySizeMiddleware, max_bytes=settings.max_body_bytes),
-            Middleware(BearerAuthMiddleware, registry=registry),
+            Middleware(BearerAuthMiddleware, registry=registry, seen=agents),
         ],
         lifespan=lifespan,
     )
@@ -93,5 +99,6 @@ def create_app(settings: Settings) -> Starlette:
     app.state.registry = registry
     app.state.engine = engine
     app.state.task_store = task_store
+    app.state.agents = agents
     app.state.agent_card = agent_card
     return app

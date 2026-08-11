@@ -9,6 +9,7 @@ from __future__ import annotations
 from a2a.types.a2a_pb2 import (
     AgentCapabilities,
     AgentCard,
+    AgentExtension,
     AgentInterface,
     AgentSkill,
     HTTPAuthSecurityScheme,
@@ -19,6 +20,7 @@ from a2a.types.a2a_pb2 import (
 from a2a.utils import TransportProtocol
 
 from a2a_hub import __version__
+from a2a_hub.routes_registry import REGISTRY_EXTENSION_URI
 
 
 #: Name of the security scheme declared in the card.
@@ -52,6 +54,20 @@ def build_agent_card(public_url: str, rpc_url: str = "/") -> AgentCard:
         capabilities=AgentCapabilities(
             streaming=False,
             push_notifications=False,
+            # Announcing the register as an extension is how A2A carries a capability
+            # beyond the core methods, so clients discover it instead of being told.
+            # Not required: a client that ignores it keeps working unchanged.
+            extensions=[
+                AgentExtension(
+                    uri=REGISTRY_EXTENSION_URI,
+                    description=(
+                        "Agents declare identity, role, host, projects and status; "
+                        "the hub stamps last-seen itself, so a dead agent cannot "
+                        "claim to be alive. POST /agents/register, GET /agents."
+                    ),
+                    required=False,
+                )
+            ],
         ),
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain"],

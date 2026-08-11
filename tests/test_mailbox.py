@@ -122,10 +122,31 @@ async def test_bidirectional_isolation(client):
 
 
 async def test_cancel_completed_task_not_reopened(client):
+    """A delivered message cannot be un-delivered by cancelling its task.
+
+    This asserted the opposite for a while, and passed by accident of timing. With
+    no delay before the handler, `CancelTask` reached the task *before* delivery
+    finished, cancelled it, and the test then read the returned task and saw
+    COMPLETED — so it looked like proof that cancel left a completed task alone.
+    Adding any latency ahead of the handler (measured with a bare `asyncio.sleep`,
+    no database involved) flipped it to TASK_NOT_CANCELABLE, which is the behaviour
+    the comment always claimed to be testing.
+
+    Now it waits for the task to actually reach COMPLETED before cancelling, so the
+    thing being asserted is the thing the name describes.
+    """
     body = await _send(client, TOKEN_A, IDENT_B)
     tid = body["result"]["task"]["id"]
-    # Delivery is immediate: the task is already COMPLETED. Cancel leaves it as is.
+
+    # Delivery is what makes the task COMPLETED; assert it rather than assume it.
+    got = await rpc(client, "GetTask", {"id": tid}, token=TOKEN_B)
+    assert got.json()["result"]["status"]["state"] == "TASK_STATE_COMPLETED"
+
     r = await rpc(client, "CancelTask", {"id": tid}, token=TOKEN_B)
-    task = r.json()["result"]
-    assert task["id"] == tid
-    assert task["status"]["state"] == "TASK_STATE_COMPLETED"
+    error = r.json()["error"]
+    assert error["data"][0]["reason"] == "TASK_NOT_CANCELABLE"
+
+    # And the message is still there to be read: refusing to cancel is not a no-op
+    # that lost it, it is the mailbox keeping what was delivered.
+    still = await rpc(client, "GetTask", {"id": tid}, token=TOKEN_B)
+    assert still.json()["result"]["status"]["state"] == "TASK_STATE_COMPLETED"
