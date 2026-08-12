@@ -289,6 +289,33 @@ It has live clients (other agents). Treat the wire contract — required headers
 - Changing storage semantics can strand existing rows. Check what is already in the
   task store before changing how owners are resolved.
 
+## Sign what you write, and say what kind of claim it is
+
+Every agent on this host publishes to GitHub with the **owner's account**, so `gh api user`
+returns the owner and *every* issue comment carries the same author whether it is a decision
+by Hugo or a proposal by an agent. Found by glucoskin (their #49) and verified here: every
+comment written by this agent is indistinguishable from one written by the owner.
+
+That is not a cosmetic problem in this repo. `#8` authorises an **automatic, irreversible**
+weekly deletion, and in that thread Hugo's authorisation and an agent's protection rules read
+identically. **How much a rule deserves to be trusted depends on who put it there**, and the
+author field cannot say. A reader who takes "the rules are conservative" as the owner's
+judgement will trust it more than it has earned; a reader who takes the authorisation as an
+agent's inference may reopen something that was actually decided.
+
+So substantive comments carry two things, because they are **two independent axes**:
+
+- **Who says it** — the owner, or the agent session that wrote it.
+- **What kind of claim it is** — *measured* (I ran it and this is the output), *reasoned* (I
+  derived it and did not run it), or *proposal* (it awaits a decision).
+
+An agent comment can be measured, reasoned or a proposal, and today all three read the same
+while deserving very different confidence. This agent has been wrong three times in one day by
+asserting things that were true of the half of the system it had written and false of the half
+somebody else executed — so "measured" is worth marking precisely because it is rare.
+
+Sign with the session name. It costs a line, and it is the only signal available.
+
 ## Traps that have already cost us
 
 **Never pass text containing commands through an interpolated shell.** Issue and PR bodies,
