@@ -317,7 +317,16 @@ def _status_age_seconds(agent: dict[str, Any]) -> int | None:
     ) + int(agent["last_seen_seconds"])
 
 
-def _status_is_older(agent: dict[str, Any], margin: int = 3600) -> bool:
+#: How much older the words may be than the sighting before it is worth saying.
+#: Calibrated against the live register rather than guessed: lexboe-117-ns3073844
+#: measured that an hour would flag 7 of 10 rows — "sale siempre", which is the
+#: failure this margin exists to avoid. The real signal sat in the top three (41 h,
+#: 18 h, 16 h) while 1.5-4 h was ordinary drift from agents that are working and have
+#: simply not restated themselves. Six hours keeps the three and drops the four.
+STATUS_STALE_AFTER = 6 * 3600
+
+
+def _status_is_older(agent: dict[str, Any], margin: int = STATUS_STALE_AFTER) -> bool:
     """Whether the words are meaningfully older than the last sighting.
 
     Only flagged past a margin: an agent that updates its status on every tick would

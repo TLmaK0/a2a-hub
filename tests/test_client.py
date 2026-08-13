@@ -523,6 +523,24 @@ def test_a_stale_status_is_marked_even_when_the_agent_is_alive():
     assert "said 18h ago" in line    # but its words are old
 
 
+def test_ordinary_drift_is_not_marked():
+    """Measured, not guessed: an hour would have flagged 7 of 10 live rows.
+
+    Agents that are working and have not restated themselves drift 1-4 h routinely.
+    Flagging that is how a marker becomes wallpaper; the real signal was at 16-41 h.
+    """
+    line = format_agent(
+        {
+            "identity": "ns/a", "role": "project", "projects": ["x"],
+            "status": "on issue 26", "declared": True,
+            "declared_at": "2026-08-13T07:00:00Z",
+            "last_seen": "2026-08-13T10:00:00Z", "last_seen_seconds": 60,
+        }
+    )
+
+    assert "said" not in line  # 3 h of drift is normal, not news
+
+
 def test_a_fresh_status_is_not_marked():
     """A marker everyone sees is a marker nobody reads."""
     line = format_agent(
