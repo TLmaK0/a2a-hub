@@ -565,3 +565,37 @@ def test_a_row_without_timestamps_is_not_guessed_at():
 
     assert "never seen" in line
     assert "said" not in line
+
+
+def test_a_stopped_loop_is_marked_silent():
+    """The question the register could not answer on 2026-08-13.
+
+    Two agents read "3 h ago" as activity and one as absence. Neither is readable
+    without the host's norm: agents here poll every 15 minutes, so an hour of silence
+    is four times the norm and means the loop stopped — which is the only thing this
+    marker claims. It says nothing about whether the agent was doing its job.
+    """
+    line = format_agent(
+        {
+            "identity": "ns/mgr", "role": "manager", "projects": ["management"],
+            "status": "tick", "declared": True,
+            "declared_at": "2026-08-13T10:11:00Z",
+            "last_seen": "2026-08-13T10:11:02Z", "last_seen_seconds": 12902,
+        }
+    )
+
+    assert "[SILENT]" in line
+
+
+def test_an_agent_polling_normally_is_not_marked_silent():
+    """Seven of ten live rows were under 15 minutes; none of them is news."""
+    line = format_agent(
+        {
+            "identity": "ns/a", "role": "project", "projects": ["x"],
+            "status": "working", "declared": True,
+            "declared_at": "2026-08-13T13:40:00Z",
+            "last_seen": "2026-08-13T13:45:00Z", "last_seen_seconds": 201,
+        }
+    )
+
+    assert "SILENT" not in line

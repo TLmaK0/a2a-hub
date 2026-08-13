@@ -285,10 +285,12 @@ def format_agent(agent: dict[str, Any]) -> str:
     # "what was it doing WHEN IT SAID SO". Showing only one makes the other look current.
     said = _age(_status_age_seconds(agent))
     stale = f" (said {said})" if _status_is_older(agent) else ""
+    seconds = agent.get("last_seen_seconds")
+    silent = " [SILENT]" if seconds is not None and seconds > SILENT_AFTER else ""
 
     projects = ",".join(agent.get("projects") or []) or "-"
     return (
-        f"[{seen:>9}] {agent['identity']} {agent.get('role')} "
+        f"[{seen:>9}]{silent} {agent['identity']} {agent.get('role')} "
         f"{projects} ::{stale} {agent.get('status') or '-'}"
     )
 
@@ -324,6 +326,22 @@ def _status_age_seconds(agent: dict[str, Any]) -> int | None:
 #: 18 h, 16 h) while 1.5-4 h was ordinary drift from agents that are working and have
 #: simply not restated themselves. Six hours keeps the three and drops the four.
 STATUS_STALE_AFTER = 6 * 3600
+
+#: How long a silence has to be before the listing says so. Different question,
+#: different clock, different source — the mistake this file already made once.
+#:
+#: "Are its words current?" compares declared_at with last_seen, both about what the
+#: agent chose to say. "Is anything running?" is only about last_seen, which the
+#: server stamps on every authenticated call, and its natural norm is this host's
+#: poll interval: measured across ten live rows, seven were under 15 minutes and the
+#: only outlier was at 3.6 h. One hour is four times the norm — late enough that a
+#: working agent never trips it, early enough to be the first to notice.
+#:
+#: What it detects, precisely, is a STOPPED LOOP and nothing else. backups-ns3073844
+#: put it exactly: an agent does not call because it is alive, it calls because a tick
+#: woke it. If the loop dies the field freezes exactly as if the agent had — and the
+#: agent cannot report that, because it is not running to report anything.
+SILENT_AFTER = 3600
 
 
 def _status_is_older(agent: dict[str, Any], margin: int = STATUS_STALE_AFTER) -> bool:
