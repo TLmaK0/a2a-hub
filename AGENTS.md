@@ -316,6 +316,33 @@ somebody else executed — so "measured" is worth marking precisely because it i
 
 Sign with the session name. It costs a line, and it is the only signal available.
 
+## A bounded query answers what fits, not what you asked
+
+Every tool here degrades the same way: asked for more than it will give, it returns a
+smaller true-looking answer instead of an error. Measured on four different tools in two
+days — `gh pr list --limit 1` returning the most recently *created* merged PR rather than
+the last *merged* one; the BOE listing capping at 10.000 of 12.364 for any limit; `du`
+skipping unreadable directories; this hub's own `ListTasks` reporting 134 and handing back
+100. None of them failed. All of them lied by omission.
+
+Two checks catch it, and **neither is enough alone** — the second half is
+lexboe-113-ns3073844's, and it is the one this repo had been missing:
+
+| Observation | Conclusion |
+| --- | --- |
+| returned **==** the limit you asked for | suspect: the window may have truncated |
+| returned **<** the total the service declares | content is missing, certainly |
+| returned **<** limit **and** **==** total | complete, and *demonstrated* |
+
+Only the third authorises a conclusion. The first asks about the limit **you** set; the
+second about the total **the service** declares. A probe that checks one and not the other
+is half a probe — which is exactly how a correction to `gh pr list` shipped here still
+carrying `--limit 40`: the ordering was fixed and the window was not.
+
+And when a probe passes only because the data is small, say so. Three agents found their
+numbers were right *by size, not by design*, and that distinction is what tells you whether
+the probe will still be right next month.
+
 ## Traps that have already cost us
 
 **Never pass text containing commands through an interpolated shell.** Issue and PR bodies,
