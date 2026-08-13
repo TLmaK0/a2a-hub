@@ -278,11 +278,55 @@ def format_agent(agent: dict[str, Any]) -> str:
     if not agent.get("declared"):
         return f"[{seen:>9}] {agent['identity']} (undeclared)"
 
+    # Two different freshnesses, and conflating them misled three agents at once on
+    # 2026-08-13: a manager seen 3 h ago still carried yesterday's status text, and the
+    # fleet read "tick 12-08" as evidence it had stopped. `seen` is stamped by the
+    # server and answers "is it alive"; the status is the agent's own words and answers
+    # "what was it doing WHEN IT SAID SO". Showing only one makes the other look current.
+    said = _age(_status_age_seconds(agent))
+    stale = f" (said {said})" if _status_is_older(agent) else ""
+
     projects = ",".join(agent.get("projects") or []) or "-"
     return (
         f"[{seen:>9}] {agent['identity']} {agent.get('role')} "
-        f"{projects} :: {agent.get('status') or '-'}"
+        f"{projects} ::{stale} {agent.get('status') or '-'}"
     )
+
+
+def _age(seconds: int | None) -> str:
+    """Human-readable age, or "never" when there is nothing to age."""
+    if seconds is None:
+        return "never"
+    if seconds < 120:
+        return f"{seconds}s ago"
+    if seconds < 7200:
+        return f"{seconds // 60}m ago"
+    return f"{seconds // 3600}h ago"
+
+
+def _status_age_seconds(agent: dict[str, Any]) -> int | None:
+    """How old the agent's own words are, derived from declared_at."""
+    declared, last_seen = agent.get("declared_at"), agent.get("last_seen")
+    if not declared or not last_seen or agent.get("last_seen_seconds") is None:
+        return None
+    from datetime import datetime
+
+    fmt = lambda v: datetime.fromisoformat(v.replace("Z", "+00:00"))  # noqa: E731
+    return int(
+        (fmt(last_seen) - fmt(declared)).total_seconds()
+    ) + int(agent["last_seen_seconds"])
+
+
+def _status_is_older(agent: dict[str, Any], margin: int = 3600) -> bool:
+    """Whether the words are meaningfully older than the last sighting.
+
+    Only flagged past a margin: an agent that updates its status on every tick would
+    otherwise carry a permanent marker, and a marker everyone sees is a marker nobody
+    reads.
+    """
+    said = _status_age_seconds(agent)
+    seen = agent.get("last_seen_seconds")
+    return said is not None and seen is not None and said - seen > margin
 
 
 def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:

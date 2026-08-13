@@ -501,3 +501,49 @@ def test_whoami_does_not_warn_because_it_is_how_you_check(capsys):
 
     assert main(["whoami"], hub) == 0
     assert capsys.readouterr().err == ""
+
+
+def test_a_stale_status_is_marked_even_when_the_agent_is_alive():
+    """The confusion of 2026-08-13, in one line.
+
+    A manager seen three hours ago still carried yesterday's status text, and three
+    agents read "tick 12-08" as evidence it had stopped — then escalated it. The row
+    has two different freshnesses and showing only one makes the other look current.
+    """
+    line = format_agent(
+        {
+            "identity": "ns/mgr", "role": "manager", "projects": ["management"],
+            "status": "tick 12-08: ...", "declared": True,
+            "declared_at": "2026-08-12T18:18:45Z",
+            "last_seen": "2026-08-13T10:11:02Z", "last_seen_seconds": 10851,
+        }
+    )
+
+    assert "3h ago" in line          # seen recently: the server says so
+    assert "said 18h ago" in line    # but its words are old
+
+
+def test_a_fresh_status_is_not_marked():
+    """A marker everyone sees is a marker nobody reads."""
+    line = format_agent(
+        {
+            "identity": "ns/a", "role": "project", "projects": ["x"],
+            "status": "on issue 26", "declared": True,
+            "declared_at": "2026-08-13T10:10:00Z",
+            "last_seen": "2026-08-13T10:11:02Z", "last_seen_seconds": 60,
+        }
+    )
+
+    assert "said" not in line
+
+
+def test_a_row_without_timestamps_is_not_guessed_at():
+    """Missing data must not be rendered as a confident claim either way."""
+    line = format_agent(
+        {"identity": "ns/b", "role": "project", "projects": [], "status": "x",
+         "declared": True, "declared_at": None, "last_seen": None,
+         "last_seen_seconds": None}
+    )
+
+    assert "never seen" in line
+    assert "said" not in line
