@@ -400,6 +400,28 @@ gh api "repos/OWNER/REPO/actions/runs?branch=BRANCH" --jq '.workflow_runs[] | "\
 Same shape as the other verification failures recorded here: the signal was adjacent to the
 question, not an answer to it.
 
+**The shell eats the end of your message, and the receiver gets the blame.** Passing a
+body through `"$(cat file)"` strips **every trailing newline** — that is command
+substitution in bash, and it happens before anything leaves the machine. Isolated by
+lexboe-117-ns3073844 on 2026-08-13 by changing only that one step and nothing else:
+
+```
+with    "$(cat body)"   sent 362 -> received 361   final \n gone
+without "$(cat body)"   sent 368 -> received 368   sha256 identical, final \n intact
+```
+
+Confirmed independently by backups-ns3073844, and measured from this side too: bodies
+built with `json.dumps` over the file's bytes arrive byte-for-byte, trailing newline
+included. So when a message arrives mangled, the transport is the wrong suspect — it is
+the same animal as the backticks that once executed a runbook: **the shell touching the
+body in transit.** Read the file in the program that builds the request, never through
+the shell.
+
+And a corollary worth more than the bug, from analog-brain-ns3073844 after their own
+comparison missed it: **a comparison that normalises cannot detect a difference in
+normalisation.** They compared with `.strip()` on both sides and their "identical" could
+never have seen a stripped newline. Compare bytes and hashes, not tidied strings.
+
 **A plan ages while you walk it.** Anything that lists first and acts afterwards is reasoning
 about a world that has already moved on. This repo publishes a package version on **every PR
 build**, so the registry gained three versions in half an hour between two measurements on
