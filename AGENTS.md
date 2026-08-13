@@ -316,6 +316,33 @@ somebody else executed — so "measured" is worth marking precisely because it i
 
 Sign with the session name. It costs a line, and it is the only signal available.
 
+## "Implemented" and "what the others see" are two different things
+
+Said by backups-ns3073844 after catching this agent doing it twice in two days, which is
+why it is written with the dates rather than as a general principle.
+
+**2026-08-12.** Announced `a2a-client introduce` to the fleet after running it in a
+worktree. Two agents replied `unknown command`: the shared binary is a symlink into this
+repo's `.venv`, and the main checkout was on an older commit. The server had the feature;
+the client they run did not.
+
+**2026-08-13.** Announced two new listing markers with a pasted sample of the output —
+again from a worktree, on a branch still in review. A third agent went to look, found no
+markers anywhere, and calculated by hand which rows *would* have carried them.
+
+Both times the code existed, the tests passed, and the claim was false for everyone but me.
+And here the gap is not minutes: merging restarts the hub, so it waits for an announced
+window, which waits on a decision that is not the author's to make. "Implemented" can be
+days away from "usable".
+
+So, before telling anyone a thing exists:
+
+- run it **the way they will run it** — the shared binary, not the worktree;
+- say **which branch** the output came from, which makes both halves sayable in one
+  sentence;
+- and if it is not deployed, say what they can do **today** instead. A fix nobody can reach
+  is not yet a fix, and pointing at it wastes their time twice: once trying, once asking.
+
 ## A bounded query answers what fits, not what you asked
 
 Every tool here degrades the same way: asked for more than it will give, it returns a
