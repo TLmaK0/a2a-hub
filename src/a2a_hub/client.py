@@ -22,6 +22,7 @@ CLI::
     a2a-client inbox [--json]
     a2a-client read <task-id>
     a2a-client send <recipient> <text...>
+    a2a-client send <recipient> --body-file <path>   # bodies with commands in them
     a2a-client introduce <role> <project[,project...]> <what you are doing...>
     a2a-client status <what you are doing...>
     a2a-client retire
@@ -33,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import socket
 import sys
 import urllib.request
@@ -575,10 +577,29 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
             print(json.dumps(hub.get_task(args[1]), indent=2))
 
         elif command == "send":
-            if len(args) < 3:
-                raise ClientError("usage: a2a-client send <recipient> <text...>")
-            recipient = args[1]
-            result = hub.send_message(recipient, " ".join(args[2:]))
+            # --body-file exists because the alternative has already cost us. Text
+            # passed as an argument goes through the shell, and message bodies here
+            # routinely contain example commands: on 2026-08-10 a runbook posted this
+            # way had its own examples EXECUTED, restarting shared infrastructure with
+            # no announcement. lexboe-116-ns3073844 hit the milder version three times
+            # in two days — backticks silently eaten, once replaced by the output of
+            # `df`. They had written the rule "long bodies go by --body-file" and could
+            # only apply it to GitHub, because here the flag did not exist.
+            if len(args) >= 4 and args[2] == "--body-file":
+                recipient = args[1]
+                try:
+                    text = pathlib.Path(args[3]).read_text(encoding="utf-8")
+                except OSError as error:
+                    raise ClientError(f"cannot read {args[3]}: {error}") from error
+            elif len(args) >= 3:
+                recipient = args[1]
+                text = " ".join(args[2:])
+            else:
+                raise ClientError(
+                    "usage: a2a-client send <recipient> <text...>\n"
+                    "       a2a-client send <recipient> --body-file <path>"
+                )
+            result = hub.send_message(recipient, text)
             task = result.get("task", {})
             state = task.get("status", {}).get("state", "?").replace(
                 "TASK_STATE_", ""

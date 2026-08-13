@@ -740,3 +740,42 @@ def test_quiet_for_refuses_what_it_cannot_read(argv):
     """A misread threshold answers a different question than the one asked."""
     with pytest.raises(ClientError):
         _quiet_for_arg(argv)
+def test_send_reads_the_body_from_a_file_verbatim(tmp_path):
+    """The whole point: a body full of commands must arrive as text, not as effects.
+
+    Passing this through a shell is what executed a runbook's own examples on
+    2026-08-10 and restarted shared infrastructure unannounced.
+    """
+    body = tmp_path / "note.md"
+    body.write_text("run `df -h` and $(whoami); backticks and $VARS intact\n")
+    sent = {}
+
+    def transport(url, data, headers):
+        sent["text"] = json.loads(data)["params"]["message"]["parts"][0]["text"]
+        return {"result": {"task": {"id": "t1", "status": {"state": "x"}}}}
+
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["send", "ns/b", "--body-file", str(body)], hub) == 0
+    assert sent["text"] == "run `df -h` and $(whoami); backticks and $VARS intact\n"
+
+
+def test_send_reports_an_unreadable_body_file(capsys):
+    hub = HubClient(_config(), transport=lambda *a: {})
+
+    assert main(["send", "ns/b", "--body-file", "/nonexistent/x.md"], hub) == 1
+    assert "cannot read" in capsys.readouterr().err
+
+
+def test_send_still_accepts_inline_text():
+    """The short path stays: not every message needs a file."""
+    sent = {}
+
+    def transport(url, data, headers):
+        sent["text"] = json.loads(data)["params"]["message"]["parts"][0]["text"]
+        return {"result": {"task": {"id": "t1", "status": {"state": "x"}}}}
+
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["send", "ns/b", "hello", "there"], hub) == 0
+    assert sent["text"] == "hello there"
