@@ -7,6 +7,7 @@ guarantee per-agent isolation.
 from __future__ import annotations
 
 from conftest import (
+    AGENT_B,
     IDENT_A,
     IDENT_B,
     TOKEN_A,
@@ -150,3 +151,70 @@ async def test_cancel_completed_task_not_reopened(client):
     # that lost it, it is the mailbox keeping what was delivered.
     still = await rpc(client, "GetTask", {"id": tid}, token=TOKEN_B)
     assert still.json()["result"]["status"]["state"] == "TASK_STATE_COMPLETED"
+
+
+# --- a merged mailbox must be readable to the end ------------------------------
+
+
+async def _drain(client, token: str, *, page_size: int) -> tuple[list, int, int]:
+    """Follow the page tokens the way a correct client does: until empty."""
+    ids, pages, total = [], 0, 0
+    params: dict = {"pageSize": page_size}
+    while True:
+        body = (await rpc(client, "ListTasks", params, token=token)).json()["result"]
+        pages += 1
+        total = int(body.get("totalSize", 0))
+        ids.extend(t["id"] for t in body.get("tasks", []))
+        next_token = body.get("nextPageToken") or ""
+        if not next_token:
+            return ids, total, pages
+        params = {"pageSize": page_size, "pageToken": next_token}
+        assert pages < 50, "pagination did not terminate"
+
+
+async def test_an_empty_page_token_means_there_is_nothing_left(client):
+    """The invariant, checkable without knowing anything about mailbox merging.
+
+    This is what failed in production on 2026-08-13: totalSize said 115, fifty tasks
+    came back, and the token said "no more". Two fields of one response cannot
+    disagree — either there is a token, or total_size equals what was returned.
+    """
+    for _ in range(7):
+        await _send(client, TOKEN_A, IDENT_B)
+
+    body = (await rpc(client, "ListTasks", {"pageSize": 3}, token=TOKEN_B)).json()[
+        "result"
+    ]
+
+    if not (body.get("nextPageToken") or ""):
+        assert body["totalSize"] == len(body["tasks"])
+
+
+async def test_every_task_is_reachable_by_following_the_tokens(client):
+    """A mailbox over one page must be readable in full, not just its newest page."""
+    sent = set()
+    for _ in range(7):
+        body = await _send(client, TOKEN_A, IDENT_B)
+        sent.add(body["result"]["task"]["id"])
+    # ...and some to the session's own mailbox, so both merged mailboxes are in play.
+    for _ in range(5):
+        body = await _send(client, TOKEN_A, AGENT_B)
+        sent.add(body["result"]["task"]["id"])
+
+    seen, total, pages = await _drain(client, TOKEN_B, page_size=3)
+
+    assert pages > 1, "the test is pointless if it all fits in one page"
+    assert sent <= set(seen), "tasks that were delivered could not be read back"
+    assert len(seen) == total
+
+
+async def test_a_malformed_page_token_restarts_instead_of_failing(client):
+    """Losing access to your own mailbox over a value you never built is worse."""
+    await _send(client, TOKEN_A, IDENT_B)
+
+    response = await rpc(
+        client, "ListTasks", {"pageSize": 2, "pageToken": "not-a-token"}, token=TOKEN_B
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"]["tasks"]
