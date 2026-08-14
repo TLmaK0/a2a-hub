@@ -779,3 +779,58 @@ def test_send_still_accepts_inline_text():
 
     assert main(["send", "ns/b", "hello", "there"], hub) == 0
     assert sent["text"] == "hello there"
+
+
+def test_the_session_flag_silences_the_shared_session_warning(
+    tmp_path, monkeypatch, capsys
+):
+    """Passing --session IS setting the session, so the warning must not fire.
+
+    It fired on every `--session` call once the warning shipped: the flag is
+    applied after the config is loaded, and the "came from the shared file" mark
+    was never cleared. That is worse than noise — it tells an agent doing the
+    right thing that it is doing the wrong thing, and the obvious "fix" is to
+    drop the flag, which lands it in the shared row the warning exists to
+    prevent.
+
+    Uses `inbox`, not `whoami`: `whoami` is exempt from the warning, so a test
+    written against it passes whether or not the bug is present. It did.
+    """
+    env_file = tmp_path / "agent.env"
+    env_file.write_text(
+        "A2A_HUB_URL=https://hub.test/\nA2A_HUB_AGENT=ns\n"
+        "A2A_HUB_TOKEN=t\nA2A_HUB_SESSION=claude-main\n"
+    )
+    monkeypatch.setattr("a2a_hub.client.DEFAULT_CONFIG_PATH", env_file)
+    monkeypatch.setattr(
+        "a2a_hub.client._urllib_transport",
+        lambda *a: {"result": {"tasks": [], "totalSize": 0}},
+    )
+    for key in ("A2A_HUB_URL", "A2A_HUB_AGENT", "A2A_HUB_TOKEN", "A2A_HUB_SESSION"):
+        monkeypatch.delenv(key, raising=False)
+
+    assert main(["--session", "mine-ns", "inbox"]) == 0
+
+    captured = capsys.readouterr()
+    assert "ns/mine-ns" in captured.out
+    assert "shared config file" not in captured.err
+
+
+def test_without_the_flag_the_shared_session_still_warns(capsys):
+    """The warning must survive the fix: that row has swallowed five agents.
+
+    Uses `inbox` rather than `whoami`, which is deliberately exempt — reading
+    your own name is the one command that cannot act on the wrong mailbox.
+    """
+    config = ClientConfig(
+        url="https://hub.test/", agent="ns", token="t", session="claude-main",
+        session_from_shared_file=True,
+    )
+    hub = HubClient(
+        config,
+        transport=lambda *a: {"result": {"tasks": [], "totalSize": 0}},
+    )
+
+    assert main(["inbox"], client=hub) == 0
+
+    assert "shared config file" in capsys.readouterr().err

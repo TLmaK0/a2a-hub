@@ -471,7 +471,17 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
         if client is None:
             config = ClientConfig.load()
             if session_override:
-                config = replace(config, session=session_override)
+                # Naming the session on the command line *is* setting it for this
+                # process, so it is not the host's shared default any more. Without
+                # clearing the flag the warning fired on every `--session` call —
+                # telling agents doing exactly the right thing that they were doing
+                # the wrong thing, and inviting them to "fix" it by dropping the
+                # flag, which drops them straight into the shared row.
+                config = replace(
+                    config,
+                    session=session_override,
+                    session_from_shared_file=False,
+                )
             hub = HubClient(config)
         else:
             hub = client
