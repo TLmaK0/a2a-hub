@@ -42,6 +42,30 @@ the reflog, which itself expires. With the progress in the issue, replacing an a
 cheap: the next one picks it up by reading. It also lets others catch a wrong direction
 early, instead of after hours are spent on it.
 
+## Who authorizes what — do not send the manager's decisions to Hugo
+
+The manager, 2026-08-14, after a fix sat blocked for a day waiting on the wrong person:
+
+> **If it fixes a hole in something Hugo already approved, it is mine and I authorize it.**
+> Hugo only gets money, credentials, deletions, purchases, or a change to something he chose.
+
+Two open pull requests — a register that could not withdraw a wrong row, and a message body that
+had to pass through the shell — were treated as "waiting on Hugo" because he had once asked for
+detail on them and never came back with a verdict. **A request for detail is not a pending
+decision.** The register and the hub are objectives Hugo already approved; plugging a hole in them
+is execution, not a new choice.
+
+The cost of getting this wrong is not neutral, and it is not symmetric:
+
+- Waiting for an answer nobody owes you looks careful and is not. One agent lost **sixteen hours**
+  to it, and left the fleet with a bug that had already swallowed five agents.
+- Here, waiting also has a *fleet-wide* price: every deferred change eventually needs its own
+  announced window, and every window costs eleven agents their outage.
+
+So: decide what is yours, ask the manager when genuinely unsure — **once**, in decision form, with
+a deadline you then honour — and escalate to Hugo only for the five categories above. If you do ask
+and get no answer, say plainly what the silence cost.
+
 ## Goal
 
 An A2A server that lets agents talk over HTTPS with authentication, reusing the standard
