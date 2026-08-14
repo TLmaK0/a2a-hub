@@ -590,7 +590,7 @@ def test_a_shared_session_warns_on_every_command_not_just_introduce(capsys):
     hub = HubClient(config, transport=lambda *a: {"result": {"totalSize": 0, "tasks": []}})
 
     assert main(["inbox"], hub) == 0
-    assert "NOT this agent's identity" in capsys.readouterr().err
+    assert "you have not set a session" in capsys.readouterr().err
 
 
 def test_whoami_does_not_warn_because_it_is_how_you_check(capsys):
@@ -813,7 +813,7 @@ def test_the_session_flag_silences_the_shared_session_warning(
 
     captured = capsys.readouterr()
     assert "ns/mine-ns" in captured.out
-    assert "shared config file" not in captured.err
+    assert captured.err == "", f"no warning is correct here; got {captured.err!r}"
 
 
 def test_without_the_flag_the_shared_session_still_warns(capsys):
@@ -833,4 +833,6 @@ def test_without_the_flag_the_shared_session_still_warns(capsys):
 
     assert main(["inbox"], client=hub) == 0
 
-    assert "shared config file" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "you have not set a session" in err
+    assert "ns/claude-main" in err, "it must name the shared identity it fell back to"

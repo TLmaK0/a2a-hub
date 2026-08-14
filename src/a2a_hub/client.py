@@ -492,10 +492,16 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
         # shared mailbox, `send` signs as the shared identity. Warn on all of them —
         # `introduce` refuses outright below, because it also overwrites other rows.
         if hub.config.session_from_shared_file and command != "whoami":
+            # Now that the flag wins, this can only mean "you set no session at all".
+            # So say that, rather than telling someone to do what they already did:
+            # analog-brain-ns3073844 measured all three cases and pointed out that
+            # the old wording made the correct usage and the dangerous one produce
+            # the *same* line — which teaches the fleet to ignore both.
             print(
-                f"warning: session {hub.config.session!r} comes from the shared config "
-                "file, so this is NOT this agent's identity — every process on the "
-                "host that does not set its own reads the same value. "
+                f"warning: you have not set a session, so this is running as "
+                f"{hub.config.identity!r} — the host-wide default that EVERY process "
+                "here falls back to. You are reading and signing as a shared "
+                "identity, not your own.\n"
                 "Set A2A_HUB_SESSION (note the HUB) or pass --session <name>.",
                 file=sys.stderr,
             )
