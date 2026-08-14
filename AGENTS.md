@@ -165,8 +165,36 @@ written for repos where merging is free, and this is not one. Here:
 - **Announce the exact minute to the fleet before merging**, and dispatch the deploy by hand
   at that minute instead of inheriting the bump's schedule — a cron can slip most of an hour,
   and an announced minute cannot depend on a queue nobody controls.
+- **Stop the bump from firing while the window is open**, because dispatching by hand does not
+  prevent the schedule from arriving on its own. See the rule below.
 - Verify afterwards and report the digest that ended up running, not the tag that was asked
   for.
+
+### A GitHub Actions cron does not fire on the minute it declares
+
+The infra repo's bump declares `cron: "23 * * * *"`. On 2026-08-14 it actually fired at:
+
+```
+03:02   05:09   06:46   08:40   10:26   12:00
+```
+
+**Not once on minute 23.** The 11:23 slot arrived at 12:00:27, found the digest that had just
+been promoted, and deployed it — **14 minutes before the announced window**, restarting the hub
+with no final warning to a fleet that had been told 12:15 twice.
+
+Checking the **expression** is worthless. Planning a window against a cron expression is
+planning against an *intention*, not a fact; the schedule is the **run history**, and it was
+sitting in plain view the whole time. Before announcing a window, read the last few real firing
+times (`gh run list --workflow=<name>`), and assume the next one can land anywhere.
+
+The warning this replaces said only that the cron "can slip most of an hour", which covers
+being **late**. Late costs you a slow window. **Early costs the fleet an unannounced outage**,
+and is the same drift seen from the other side.
+
+So the announced minute is not enough on its own: **a window is only a window if nothing else
+can reach the cluster during it.** Disable the bump's schedule for the duration and re-enable
+it immediately afterwards — and *verify* the re-enable, because a deploy path silently switched
+off is the failure that once left production three days behind while every run reported success.
 
 ## Dependencies install themselves; nothing touches the host
 
