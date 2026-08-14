@@ -21,6 +21,7 @@ from a2a_hub.client import (
     format_task,
     main,
 )
+from a2a_hub.client import _quiet_for_arg
 
 
 def _config() -> ClientConfig:
@@ -39,17 +40,24 @@ async def make_client(app):
     loop = asyncio.get_running_loop()
     asgi = httpx.ASGITransport(app=app)
 
-    async def _post(url: str, body: bytes, headers: dict) -> dict:
+    async def _request(url: str, body: bytes | None, headers: dict) -> dict:
+        # Method follows the body, exactly as the real transport does: urllib sends
+        # GET when `data` is None. Posting everything here made the harness disagree
+        # with production, and the register's GET-only routes went untested through
+        # the client for as long as that lasted.
         async with httpx.AsyncClient(
             transport=asgi, base_url="https://hub.test"
         ) as http:
-            response = await http.post(url, content=body, headers=headers)
+            if body is None:
+                response = await http.get(url, headers=headers)
+            else:
+                response = await http.post(url, content=body, headers=headers)
             return response.json()
 
     def _factory(agent: str, token: str, session: str = "s1") -> HubClient:
         def _sync_transport(url, body, headers):
             future = asyncio.run_coroutine_threadsafe(
-                _post(url, body, headers), loop
+                _request(url, body, headers), loop
             )
             return future.result(timeout=30)
 
@@ -692,3 +700,43 @@ def test_an_agent_polling_normally_is_not_marked_silent():
     )
 
     assert "SILENT" not in line
+# --- asking who has gone quiet ----------------------------------------------
+
+async def test_cli_agents_quiet_for_asks_the_hub_the_narrow_question(
+    make_client, capsys
+):
+    """The filter must reach the hub, not be applied to a page already fetched."""
+    client = make_client(AGENT_A, TOKEN_A)
+    await run(
+        client.introduce,
+        role="project",
+        host="host-1",
+        projects=["a2a-hub"],
+        status="working",
+    )
+
+    assert await run(main, ["agents", "--quiet-for", "1h"], client=client) == 0
+    assert "nobody has been quiet for 3600s" in capsys.readouterr().out
+
+    assert await run(main, ["agents"], client=client) == 0
+    assert IDENT_A in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("raw", "seconds"),
+    [("90", 90), ("30m", 1800), ("2h", 7200), ("45s", 45)],
+)
+def test_quiet_for_accepts_the_units_the_question_is_asked_in(raw, seconds):
+    """You suspect an agent is stuck in minutes, not seconds."""
+    assert _quiet_for_arg(["agents", "--quiet-for", raw]) == seconds
+
+
+def test_quiet_for_is_absent_unless_asked_for():
+    assert _quiet_for_arg(["agents"]) is None
+
+
+@pytest.mark.parametrize("argv", [["agents", "--quiet-for"], ["agents", "--quiet-for", "soon"]])
+def test_quiet_for_refuses_what_it_cannot_read(argv):
+    """A misread threshold answers a different question than the one asked."""
+    with pytest.raises(ClientError):
+        _quiet_for_arg(argv)

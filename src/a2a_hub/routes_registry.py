@@ -76,10 +76,40 @@ def build_registry_routes(agents: AgentRegistry) -> list[Route]:
 
         No filtering by role or principal: the question this answers is "is there
         another manager?", which cannot be answered from a filtered view.
+
+        ``?quiet_for=<seconds>`` is the one exception, and it narrows by a fact the
+        server itself stamped rather than by anything an agent claimed: return only
+        identities not seen for that long. It exists so "who has gone quiet?" can be
+        *asked*, instead of depending on someone scanning a list and noticing.
         """
         include_retired = request.query_params.get("retired") == "true"
+        raw = request.query_params.get("quiet_for")
+        quiet_for: int | None = None
+        if raw is not None:
+            try:
+                quiet_for = int(raw)
+            except ValueError:
+                return JSONResponse(
+                    {
+                        "error": "invalid_quiet_for",
+                        "detail": f"expected an integer number of seconds; got {raw!r}",
+                    },
+                    status_code=400,
+                )
+            if quiet_for < 0:
+                return JSONResponse(
+                    {
+                        "error": "invalid_quiet_for",
+                        "detail": "seconds cannot be negative",
+                    },
+                    status_code=400,
+                )
         return JSONResponse(
-            {"agents": await agents.list_agents(include_retired=include_retired)}
+            {
+                "agents": await agents.list_agents(
+                    include_retired=include_retired, quiet_for=quiet_for
+                )
+            }
         )
 
     async def update_status(request: Request) -> JSONResponse:

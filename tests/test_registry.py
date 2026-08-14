@@ -445,3 +445,87 @@ async def test_retiring_does_not_reach_another_principal(client):
 
     still = (await client.get(LIST, headers=auth(TOKEN_B))).json()["agents"]
     assert IDENT_B in [a["identity"] for a in still]
+# --- who has gone quiet ------------------------------------------------------
+#
+# The register always held this answer; the failure was that it only gave it to
+# someone who thought to look. A manager stopped calling the hub for six hours
+# while two agents read their empty mailboxes as "no decision yet".
+
+
+def _age_the_row(monkeypatch, seconds: int) -> None:
+    """Make every subsequent read believe `seconds` have passed.
+
+    Moving the clock forward beats writing a doctored `last_seen` into the table:
+    it exercises the same age arithmetic the server actually runs.
+    """
+    import datetime as _dt
+
+    from a2a_hub import registry as registry_module
+
+    real_now = registry_module._now()
+    monkeypatch.setattr(
+        registry_module,
+        "_now",
+        lambda: real_now + _dt.timedelta(seconds=seconds),
+    )
+
+
+async def test_quiet_for_hides_an_agent_that_was_just_seen(client, monkeypatch):
+    """The filter answers a question, so it must exclude the healthy case."""
+    await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_A))
+
+    listed = await client.get(f"{LIST}?quiet_for=3600", headers=auth(TOKEN_B))
+
+    assert listed.status_code == 200
+    assert [a["identity"] for a in listed.json()["agents"]] == []
+
+
+async def test_quiet_for_surfaces_the_agent_that_stopped_calling(
+    client, monkeypatch
+):
+    """The incident this exists for: alive-looking row, six hours of silence."""
+    await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_A))
+    _age_the_row(monkeypatch, 6 * 3600)
+
+    listed = await client.get(f"{LIST}?quiet_for=3600", headers=auth(TOKEN_B))
+
+    entry = find(listed.json()["agents"], IDENT_A)
+    assert entry["last_seen_seconds"] >= 6 * 3600
+    assert entry["role"] == "manager", "the answer must still say what went quiet"
+
+
+async def test_quiet_for_is_measured_from_the_last_request_not_the_declaration(
+    client, monkeypatch
+):
+    """`last_seen` is stamped by the server; that is the whole value of it.
+
+    An agent whose *words* are old but that is still calling the hub is not quiet,
+    and reporting it as such is how you learn to ignore the answer.
+    """
+    await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_A))
+    _age_the_row(monkeypatch, 6 * 3600)
+    # Any authenticated request re-stamps last_seen. The status text stays old.
+    await client.get(LIST, headers=auth(TOKEN_A))
+
+    listed = await client.get(f"{LIST}?quiet_for=3600", headers=auth(TOKEN_B))
+
+    assert [a["identity"] for a in listed.json()["agents"]] == []
+
+
+async def test_the_unfiltered_listing_is_unchanged(client, monkeypatch):
+    """No threshold is invented by default: the hub does not know what long means."""
+    await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_A))
+    _age_the_row(monkeypatch, 30 * 24 * 3600)
+
+    listed = await client.get(LIST, headers=auth(TOKEN_B))
+
+    assert find(listed.json()["agents"], IDENT_A)["role"] == "manager"
+
+
+@pytest.mark.parametrize("raw", ["soon", "", "-5", "1h"])
+async def test_a_malformed_quiet_for_is_refused_rather_than_ignored(client, raw):
+    """Silently ignoring it would answer a different question than the one asked."""
+    listed = await client.get(f"{LIST}?quiet_for={raw}", headers=auth(TOKEN_B))
+
+    assert listed.status_code == 400
+    assert listed.json()["error"] == "invalid_quiet_for"

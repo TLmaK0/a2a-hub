@@ -269,13 +269,25 @@ class AgentRegistry:
                 )
         return text
 
-    async def list_agents(self, include_retired: bool = False) -> list[dict]:
+    async def list_agents(
+        self, include_retired: bool = False, quiet_for: int | None = None
+    ) -> list[dict]:
         """Every known identity, most recently seen first, with ages.
 
         Ages are computed at read time and returned alongside the timestamps: a
         register that can go stale must *look* stale. A caller reading
         ``last_seen_seconds: 10800`` cannot mistake it for a live agent, whereas a
         bare list of names looks alive whatever its age.
+
+        ``quiet_for`` keeps only identities not seen for that many seconds. It filters
+        on ``last_seen``, which the *server* stamps on every authenticated request —
+        not on anything the agent said about itself, which is the only reason the
+        answer is worth having. An identity that has somehow never been seen counts as
+        quiet: never is longer than any threshold.
+
+        The hub deliberately picks no threshold of its own. What counts as "too long"
+        depends on the agent's poll interval, which the hub does not know, and a
+        threshold invented here would produce an alert nobody reads.
         """
         await self.create_schema()
         query = select(registrations).order_by(registrations.c.last_seen.desc())
@@ -289,6 +301,9 @@ class AgentRegistry:
         for row in rows:
             last_seen = row["last_seen"]
             declared_at = row["declared_at"]
+            age = _age_seconds(last_seen, now)
+            if quiet_for is not None and age is not None and age < quiet_for:
+                continue
             agents.append(
                 {
                     "identity": row["identity"],
@@ -300,7 +315,7 @@ class AgentRegistry:
                     "declared": declared_at is not None,
                     "declared_at": _isoformat(declared_at),
                     "last_seen": _isoformat(last_seen),
-                    "last_seen_seconds": _age_seconds(last_seen, now),
+                    "last_seen_seconds": age,
                     "retired_at": _isoformat(row["retired_at"]),
                 }
             )

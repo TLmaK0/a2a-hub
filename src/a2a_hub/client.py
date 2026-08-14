@@ -25,7 +25,7 @@ CLI::
     a2a-client introduce <role> <project[,project...]> <what you are doing...>
     a2a-client status <what you are doing...>
     a2a-client retire
-    a2a-client agents [--json]
+    a2a-client agents [--json] [--quiet-for SECONDS]
     a2a-client [--session NAME] ...      # overrides A2A_HUB_SESSION
 """
 
@@ -216,9 +216,14 @@ class HubClient:
         """Withdraw my registration. Retired, not deleted."""
         return self._http("/agents/retire", {})
 
-    def agents(self) -> dict[str, Any]:
-        """Who else is connected, what they are, and when they were last seen."""
-        return self._http("/agents", None)
+    def agents(self, quiet_for: int | None = None) -> dict[str, Any]:
+        """Who else is connected, what they are, and when they were last seen.
+
+        With ``quiet_for``, only those the hub has not heard from for that many
+        seconds — the question "who has gone quiet?", asked rather than eyeballed.
+        """
+        path = "/agents" if quiet_for is None else f"/agents?quiet_for={quiet_for}"
+        return self._http(path, None)
 
     def list_tasks(
         self,
@@ -415,6 +420,33 @@ def _status_is_older(agent: dict[str, Any], margin: int = STATUS_STALE_AFTER) ->
     return said is not None and seen is not None and said - seen > margin
 
 
+def _quiet_for_arg(args: list[str]) -> int | None:
+    """Read ``--quiet-for SECONDS`` off the command line, or None if absent.
+
+    Accepts a plain number of seconds and the ``30m`` / ``2h`` shorthands, because
+    the question is always asked in minutes or hours and converting in your head at
+    the moment you suspect an agent is stuck is how you get it wrong.
+    """
+    if "--quiet-for" not in args:
+        return None
+    index = args.index("--quiet-for")
+    if index + 1 >= len(args):
+        raise ClientError("usage: a2a-client agents --quiet-for <seconds|30m|2h>")
+    raw = args[index + 1]
+    units = {"s": 1, "m": 60, "h": 3600}
+    factor = units.get(raw[-1:], 1) if raw[-1:] in units else 1
+    number = raw[:-1] if raw[-1:] in units else raw
+    try:
+        value = int(number) * factor
+    except ValueError:
+        raise ClientError(
+            f"--quiet-for expects seconds or 30m/2h; got {raw!r}"
+        ) from None
+    if value < 0:
+        raise ClientError("--quiet-for cannot be negative")
+    return value
+
+
 def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     args = list(sys.argv[1:] if argv is None else argv)
@@ -524,11 +556,17 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
             print(f"retired {result['identity']}")
 
         elif command == "agents":
-            result = hub.agents()
+            quiet_for = _quiet_for_arg(args)
+            result = hub.agents(quiet_for)
             if "--json" in args:
                 print(json.dumps(result, indent=2))
             else:
-                for agent in result.get("agents", []):
+                listed = result.get("agents", [])
+                if quiet_for is not None and not listed:
+                    # A silent "nothing" reads like a failed command. Say it plainly:
+                    # nobody being quiet is an answer, and a useful one.
+                    print(f"nobody has been quiet for {quiet_for}s")
+                for agent in listed:
                     print(format_agent(agent))
 
         elif command == "read":
