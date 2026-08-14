@@ -140,6 +140,99 @@ async def test_cli_inbox_json_and_read(make_client, capsys):
     assert json.loads(capsys.readouterr().out)["id"] == task_id
 
 
+# --- reading a mailbox that does not fit in one page ------------------------
+
+async def test_client_drains_every_page_of_a_multi_page_mailbox(make_client):
+    """The whole point: what the client returns must be the whole mailbox.
+
+    The server-side fix made the page token truthful; this is the other half —
+    a client that actually follows it. Before, `a2a-client inbox` issued one
+    ListTasks and printed whatever fitted.
+    """
+    sender = make_client(AGENT_A, TOKEN_A)
+    recipient = make_client(AGENT_B, TOKEN_B)
+    sent = set()
+    for i in range(7):
+        result = await run(sender.send_message, IDENT_B, f"message {i}")
+        sent.add(result["task"]["id"])
+
+    whole = await run(recipient.list_all_tasks, page_size=2)
+
+    assert whole["pagesRead"] > 1, "the test is pointless if it all fits in one page"
+    assert whole["totalSize"] == len(whole["tasks"]) == len(sent)
+    assert sent == {task["id"] for task in whole["tasks"]}
+    assert not whole.get("incomplete")
+
+
+async def test_one_page_is_still_one_page(make_client):
+    """`list_tasks` stays a single request — the drain is the opt-in behaviour."""
+    sender = make_client(AGENT_A, TOKEN_A)
+    recipient = make_client(AGENT_B, TOKEN_B)
+    for i in range(5):
+        await run(sender.send_message, IDENT_B, f"message {i}")
+
+    page = await run(recipient.list_tasks, page_size=2)
+
+    assert len(page["tasks"]) == 2
+    assert page["totalSize"] == 5
+    assert page["nextPageToken"]
+
+
+async def test_the_drain_refuses_to_spin_on_a_repeating_token(make_client):
+    """A hub that always hands back the same token must not hang an agent loop.
+
+    Agents here poll every 15 minutes; a client that never returns is a dead
+    agent whose process still looks alive — the exact failure this fleet has
+    already spent days diagnosing.
+    """
+    recipient = make_client(AGENT_B, TOKEN_B)
+
+    def _always_more(include_artifacts=True, *, page_size=None, page_token=None):
+        return {"tasks": [{"id": "x"}], "totalSize": 99, "nextPageToken": "same"}
+
+    recipient.list_tasks = _always_more
+
+    whole = recipient.list_all_tasks(page_size=2)
+
+    assert whole["incomplete"] is True
+    assert whole["pagesRead"] == 2, "it must stop the moment a token repeats"
+
+
+async def test_cli_inbox_reads_the_whole_mailbox_and_prints_both_numbers(
+    make_client, capsys
+):
+    """`returned of total` is the pairing that made the original bug findable."""
+    sender = make_client(AGENT_A, TOKEN_A)
+    recipient = make_client(AGENT_B, TOKEN_B)
+    for i in range(4):
+        await run(sender.send_message, IDENT_B, f"message {i}")
+
+    assert await run(main, ["inbox"], client=recipient) == 0
+
+    out = capsys.readouterr().out
+    assert "4 of 4 task(s)" in out
+    assert "WARNING" not in out
+    for i in range(4):
+        assert f"message {i}" in out
+
+
+def test_cli_inbox_warns_when_it_could_not_read_everything(make_client, capsys):
+    """A short read must say so. Silence is what let agents ration themselves."""
+    client = make_client(AGENT_B, TOKEN_B)
+    client.list_all_tasks = lambda *a, **k: {
+        "tasks": [],
+        "totalSize": 258,
+        "pagesRead": 100,
+        "incomplete": True,
+    }
+
+    assert main(["inbox"], client=client) == 0
+
+    out = capsys.readouterr().out
+    assert "0 of 258 task(s)" in out
+    assert "NOT your whole mailbox" in out
+
+
 def test_cli_whoami_hides_token(make_client, capsys):
     client = make_client(AGENT_A, TOKEN_A)
     assert main(["whoami"], client=client) == 0

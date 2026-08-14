@@ -220,9 +220,68 @@ class HubClient:
         """Who else is connected, what they are, and when they were last seen."""
         return self._http("/agents", None)
 
-    def list_tasks(self, include_artifacts: bool = True) -> dict[str, Any]:
-        """List the tasks waiting in *my* mailbox."""
-        return self._rpc("ListTasks", {"includeArtifacts": include_artifacts})
+    def list_tasks(
+        self,
+        include_artifacts: bool = True,
+        *,
+        page_size: int | None = None,
+        page_token: str | None = None,
+    ) -> dict[str, Any]:
+        """List **one page** of the tasks waiting in *my* mailbox."""
+        params: dict[str, Any] = {"includeArtifacts": include_artifacts}
+        if page_size is not None:
+            params["pageSize"] = page_size
+        if page_token:
+            params["pageToken"] = page_token
+        return self._rpc("ListTasks", params)
+
+    def list_all_tasks(
+        self,
+        include_artifacts: bool = True,
+        *,
+        page_size: int = 100,
+        max_pages: int = 100,
+    ) -> dict[str, Any]:
+        """Follow the page tokens to the end, which is the only honest way to read.
+
+        A single ``ListTasks`` answers what fits, not what you asked for. Reading one
+        page and stopping is how a mailbox of 258 looked like a mailbox of 50 — with
+        no error to notice, because the server used to hand back an empty token while
+        there was more.
+
+        Returns a page-shaped dict carrying every task, plus ``pagesRead`` and, if the
+        walk was cut short, ``incomplete``. It stops **without raising**: half a
+        mailbox plus a warning beats an exception and no mailbox at all.
+        """
+        tasks: list[dict[str, Any]] = []
+        seen_tokens: set[str] = set()
+        token, pages, total, incomplete = "", 0, 0, False
+        while True:
+            page = self.list_tasks(
+                include_artifacts, page_size=page_size, page_token=token or None
+            )
+            pages += 1
+            tasks.extend(page.get("tasks", []))
+            total = int(page.get("totalSize", 0))
+            token = page.get("nextPageToken") or ""
+            if not token:
+                break
+            # A repeated token means the hub is walking in a circle; a page cap means
+            # it is handing out more pages than any real mailbox needs. Either way,
+            # stop — an agent loop must not spin on someone else's bug.
+            if token in seen_tokens or pages >= max_pages:
+                incomplete = True
+                break
+            seen_tokens.add(token)
+        result: dict[str, Any] = {
+            "tasks": tasks,
+            "totalSize": total,
+            "nextPageToken": "",
+            "pagesRead": pages,
+        }
+        if incomplete:
+            result["incomplete"] = True
+        return result
 
     def get_task(self, task_id: str) -> dict[str, Any]:
         """Fetch a single task from my mailbox by id."""
@@ -403,14 +462,25 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
             print(f"hub      : {hub.config.url}")
 
         elif command == "inbox":
-            result = hub.list_tasks()
+            result = hub.list_all_tasks()
             if "--json" in args:
                 print(json.dumps(result, indent=2))
             else:
+                returned, total = len(result.get("tasks", [])), result.get(
+                    "totalSize", 0
+                )
+                # Both numbers, always. Printing only the total is what let a
+                # truncated read pass for a whole one for weeks.
                 print(
                     f"mailbox of {hub.config.identity}: "
-                    f"{result.get('totalSize', 0)} task(s)"
+                    f"{returned} of {total} task(s), "
+                    f"{result.get('pagesRead', 1)} page(s)"
                 )
+                if result.get("incomplete") or returned != total:
+                    print(
+                        f"WARNING: read {returned} of {total} — this is NOT your whole "
+                        "mailbox. Older messages are missing."
+                    )
                 for task in result.get("tasks", []):
                     print(format_task(task))
 
