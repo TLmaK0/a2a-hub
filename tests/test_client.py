@@ -836,3 +836,24 @@ def test_without_the_flag_the_shared_session_still_warns(capsys):
     err = capsys.readouterr().err
     assert "you have not set a session" in err
     assert "ns/claude-main" in err, "it must name the shared identity it fell back to"
+def test_help_after_a_subcommand_prints_help_and_does_nothing_else(capsys):
+    """Asking for help must have no side effects.
+
+    `a2a-client inbox --help` ignored the flag and ran `inbox`. On 2026-08-14 two
+    agents typed exactly that while reading about sessions and were shown a
+    mailbox that was not theirs. Harmless that time because listing is read-only;
+    the principle is not: `--help` is what you type when you are unsure.
+    """
+    called = []
+    config = ClientConfig(url="https://hub.test/", agent="a", token="t", session="s1")
+    hub = HubClient(config, transport=lambda *a: called.append(a) or {"result": {}})
+
+    assert main(["inbox", "--help"], client=hub) == 0
+
+    assert called == [], "help must not reach the hub"
+    assert "a2a-client whoami" in capsys.readouterr().out
+
+
+def test_help_still_works_on_its_own(capsys):
+    assert main(["--help"]) == 0
+    assert "a2a-client inbox" in capsys.readouterr().out

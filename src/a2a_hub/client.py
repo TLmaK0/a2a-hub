@@ -463,7 +463,13 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
         session_override = args[index + 1]
         del args[index : index + 2]
 
-    if not args or args[0] in ("-h", "--help"):
+    # Asking for help must never *do* anything. `a2a-client inbox --help` used to
+    # ignore the flag and run the command: two agents on 2026-08-14 typed it while
+    # reading up on sessions and were shown a mailbox that was not theirs (138 and
+    # 122 tasks, both the shared row). Read-only and harmless that time, but "help"
+    # is the one word a user types when they are unsure — the moment side effects
+    # are least welcome.
+    if not args or "-h" in args or "--help" in args:
         print(__doc__)
         return 0
 
