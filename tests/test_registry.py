@@ -529,3 +529,74 @@ async def test_a_malformed_quiet_for_is_refused_rather_than_ignored(client, raw)
 
     assert listed.status_code == 400
     assert listed.json()["error"] == "invalid_quiet_for"
+
+
+# --- a database that existed before the column did ---------------------------
+#
+# The failure this pins took the register down in production on 2026-08-14 while
+# every test passed. Tests build an empty database, so `create_all` creates the
+# whole table and a missing column is impossible. The only test that can catch it
+# is one that starts from the OLD schema on purpose.
+
+
+async def test_a_register_created_before_retired_at_still_lists(tmp_path):
+    """Exactly the production case: months-old database, newly added column."""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from a2a_hub.registry import AgentRegistry
+
+    db = tmp_path / "old.sqlite"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db}")
+
+    # The table exactly as it was before `retired_at` was introduced, with a row
+    # in it — an empty table would let ADD COLUMN succeed for the wrong reason.
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "CREATE TABLE agent_registrations ("
+                " identity VARCHAR(255) NOT NULL PRIMARY KEY,"
+                " role VARCHAR(32) DEFAULT '' NOT NULL,"
+                " host VARCHAR(200) DEFAULT '' NOT NULL,"
+                " projects VARCHAR(2048) DEFAULT '[]' NOT NULL,"
+                " status VARCHAR(200) DEFAULT '' NOT NULL,"
+                " declared_at DATETIME,"
+                " last_seen DATETIME)"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO agent_registrations"
+                " (identity, role, host, projects, status, declared_at, last_seen)"
+                " VALUES ('ns/old', 'manager', 'h', '[]', 'from before',"
+                " '2026-08-01 10:00:00', '2026-08-01 10:00:00')"
+            )
+        )
+
+    registry = AgentRegistry(engine)
+    listed = await registry.list_agents()
+
+    assert [a["identity"] for a in listed] == ["ns/old"]
+    assert listed[0]["status"] == "from before", "the existing row must survive"
+    assert listed[0]["retired_at"] is None
+    await engine.dispose()
+
+
+async def test_the_upgrade_does_not_disturb_a_current_database(tmp_path):
+    """Running it against an up-to-date schema must be a no-op, not a rewrite."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from a2a_hub.registry import AgentRegistry
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'new.sqlite'}")
+    registry = AgentRegistry(engine)
+    await registry.create_schema()
+    await registry.declare("ns/x", declaration())
+
+    # Second boot over the same file: nothing to add, nothing lost.
+    reopened = AgentRegistry(engine)
+    await reopened.create_schema()
+
+    listed = await reopened.list_agents()
+    assert [a["identity"] for a in listed] == ["ns/x"]
+    await engine.dispose()

@@ -24,7 +24,7 @@ import asyncio
 import datetime
 import json
 
-from sqlalchemy import Column, DateTime, MetaData, String, Table, select
+from sqlalchemy import Column, DateTime, MetaData, String, Table, inspect, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -71,6 +71,45 @@ REUSE_WINDOW_SECONDS = 900
 #: manager that has not called in an hour is probably gone, and warning about it
 #: would train people to ignore the warning.
 MANAGER_WINDOW_SECONDS = 3600
+
+
+def _add_missing_columns(conn) -> None:
+    """Add columns a table gained after it was first created.
+
+    ``create_all`` creates missing *tables*; it does nothing to a table that
+    already exists, columns included. That gap took the register down in
+    production on 2026-08-14: `retired_at` was added with the retire feature, the
+    live database had been created months earlier without it, and every listing
+    failed with ``no such column: agent_registrations.retired_at`` while the whole
+    test suite passed — because tests always start from an empty database, where
+    the column is created and the gap cannot exist.
+
+    Deliberately narrow: it only ever *adds* nullable columns. Dropping, renaming
+    or retyping is not something to infer from a schema diff at startup, and a
+    column that is NOT NULL without a server default cannot be added to a table
+    that already has rows — so that case raises here, loudly and at boot, instead
+    of failing later on the first query that mentions it.
+    """
+    inspector = inspect(conn)
+    for table in _metadata.tables.values():
+        if not inspector.has_table(table.name):
+            continue
+        existing = {column["name"] for column in inspector.get_columns(table.name)}
+        for column in table.columns:
+            if column.name in existing:
+                continue
+            if not column.nullable and column.server_default is None:
+                raise RuntimeError(
+                    f"cannot add required column {table.name}.{column.name} to an "
+                    "existing table: give it a server_default or migrate by hand"
+                )
+            ddl = column.type.compile(conn.dialect)
+            default = ""
+            if column.server_default is not None:
+                default = f" DEFAULT {column.server_default.arg.text}"  # type: ignore[union-attr]
+            conn.exec_driver_sql(
+                f"ALTER TABLE {table.name} ADD COLUMN {column.name} {ddl}{default}"
+            )
 
 
 def _now() -> datetime.datetime:
@@ -138,6 +177,7 @@ class AgentRegistry:
                 return
             async with self._engine.begin() as conn:
                 await conn.run_sync(_metadata.create_all)
+                await conn.run_sync(_add_missing_columns)
             self._ready = True
 
     async def touch(self, identity: str) -> None:
