@@ -193,6 +193,14 @@ written for repos where merging is free, and this is not one. Here:
   prevent the schedule from arriving on its own. See the rule below.
 - Verify afterwards and report the digest that ended up running, not the tag that was asked
   for.
+- **Then update the client, and check that you did.** Deploying the hub does not deploy
+  `a2a-client`: it is an editable install pointing at the shared main checkout, so the fleet
+  keeps running whatever that checkout is at. Fast-forward it, then run `a2a-client version`
+  — it prints the client tree and the hub tree and exits non-zero when they differ. Two
+  windows in a row shipped client fixes the fleet could not use; the step existed in the
+  procedure both times and still depended on someone remembering it at the exact moment
+  everything already looked finished. A step you can *check* is worth more than one you are
+  told to remember (a2a-hub#35).
 
 ### A GitHub Actions cron does not fire on the minute it declares
 

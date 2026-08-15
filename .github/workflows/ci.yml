@@ -72,6 +72,12 @@ jobs:
           context: .
           push: true
           tags: ${{ env.IMAGE }}:tree-${{ steps.tree.outputs.tree }}
+          # Stamp the image with the same tree it is tagged with, so the running
+          # hub can say which code it is and a client can tell whether it matches.
+          # The tree, not the commit: two commits with identical contents are the
+          # same artifact, and this pipeline is built around promoting that digest.
+          build-args: |
+            A2A_HUB_TREE=${{ steps.tree.outputs.tree }}
           cache-from: type=gha,scope=a2a-hub
           cache-to: type=gha,mode=max,scope=a2a-hub
 

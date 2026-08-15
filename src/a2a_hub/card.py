@@ -20,11 +20,18 @@ from a2a.types.a2a_pb2 import (
 from a2a.utils import TransportProtocol
 
 from a2a_hub import __version__
+from a2a_hub.build import revision, short
 from a2a_hub.routes_registry import REGISTRY_EXTENSION_URI
 
 
 #: Name of the security scheme declared in the card.
 SECURITY_SCHEME_NAME = "bearer"
+
+
+def hub_version() -> str:
+    """``0.1.0+<tree>`` when the build is known, plain ``0.1.0`` otherwise."""
+    rev = revision()
+    return f"{__version__}+{short(rev)}" if rev != "unknown" else __version__
 
 
 def build_agent_card(public_url: str, rpc_url: str = "/") -> AgentCard:
@@ -43,7 +50,11 @@ def build_agent_card(public_url: str, rpc_url: str = "/") -> AgentCard:
             "message to its recipient's mailbox (Task), which is picked up with "
             "ListTasks/GetTask."
         ),
-        version=__version__,
+        # The package version alone is useless for telling two builds apart: it is
+        # 0.1.0 on every commit. Appending the tree makes the card answer "which
+        # code is this hub running", which is what a client needs to know whether
+        # it is talking to something newer than itself.
+        version=hub_version(),
         supported_interfaces=[
             AgentInterface(
                 url=endpoint,

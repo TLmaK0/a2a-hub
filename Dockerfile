@@ -20,6 +20,12 @@ COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 RUN uv sync --frozen --no-dev
 
+# Which code this image is, stamped from the SAME tree hash CI tags it with. Kept
+# last-but-one so it does not invalidate the dependency layer: a new tree would
+# otherwise rebuild everything above it.
+ARG A2A_HUB_TREE=""
+ENV A2A_HUB_TREE=$A2A_HUB_TREE
+
 # Persistent SQLite mailbox outside the image layer.
 ENV A2A_HUB_DB_PATH=/data/a2a-hub.db
 RUN mkdir -p /data

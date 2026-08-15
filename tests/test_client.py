@@ -857,3 +857,50 @@ def test_help_after_a_subcommand_prints_help_and_does_nothing_else(capsys):
 def test_help_still_works_on_its_own(capsys):
     assert main(["--help"]) == 0
     assert "a2a-client inbox" in capsys.readouterr().out
+
+
+# --- telling a stale client from a current one -------------------------------
+#
+# The failure: a window shipped three client fixes and the fleet had none of
+# them, because `a2a-client` is an editable install pointing at a checkout the
+# deploy never touches. Nothing reported it — the symptom was "no such option".
+
+
+def _client_with_card(version: str) -> HubClient:
+    config = ClientConfig(url="https://hub.test/", agent="a", token="t", session="s1")
+    return HubClient(config, transport=lambda *a: {"version": version})
+
+
+def test_version_reports_a_match_when_client_and_hub_are_the_same_tree(
+    monkeypatch, capsys
+):
+    from a2a_hub import build as build_module
+
+    monkeypatch.setattr(build_module, "revision", lambda: "b" * 40)
+    monkeypatch.setattr("a2a_hub.client.revision", lambda: "b" * 40)
+
+    assert main(["version"], client=_client_with_card("0.1.0+" + "b" * 12)) == 0
+
+    assert "match  : yes" in capsys.readouterr().out
+
+
+def test_version_fails_loudly_when_the_client_is_not_what_the_hub_runs(
+    monkeypatch, capsys
+):
+    """Exit code 1: a stale client is a real problem, not a note."""
+    monkeypatch.setattr("a2a_hub.client.revision", lambda: "c" * 40)
+
+    assert main(["version"], client=_client_with_card("0.1.0+" + "d" * 12)) == 1
+
+    captured = capsys.readouterr()
+    assert "match  : NO" in captured.out
+    assert "a2a-hub#35" in captured.err, "it must say what to actually do"
+
+
+def test_version_says_cannot_tell_rather_than_guessing(monkeypatch, capsys):
+    """A wheel install has no tree. Silence would read as agreement."""
+    monkeypatch.setattr("a2a_hub.client.revision", lambda: "unknown")
+
+    assert main(["version"], client=_client_with_card("0.1.0")) == 0
+
+    assert "cannot tell" in capsys.readouterr().out
