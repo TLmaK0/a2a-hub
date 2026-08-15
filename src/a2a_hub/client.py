@@ -27,6 +27,7 @@ CLI::
     a2a-client status <what you are doing...>
     a2a-client retire
     a2a-client agents [--json] [--quiet-for SECONDS]
+    a2a-client version
     a2a-client [--session NAME] ...      # overrides A2A_HUB_SESSION
 """
 
@@ -42,6 +43,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+
+from a2a_hub import __version__
+from a2a_hub.build import UNKNOWN, revision, short
 
 
 #: Default location of the agent credentials file.
@@ -217,6 +221,10 @@ class HubClient:
     def retire(self) -> dict[str, Any]:
         """Withdraw my registration. Retired, not deleted."""
         return self._http("/agents/retire", {})
+
+    def card(self) -> dict[str, Any]:
+        """The hub's Agent Card, which carries the build it is running."""
+        return self._http("/.well-known/agent-card.json", None)
 
     def agents(self, quiet_for: int | None = None) -> dict[str, Any]:
         """Who else is connected, what they are, and when they were last seen.
@@ -578,6 +586,28 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
         elif command == "retire":
             result = hub.retire()
             print(f"retired {result['identity']}")
+
+        elif command == "version":
+            mine = revision()
+            theirs = (hub.card().get("version") or "")
+            hub_tree = theirs.partition("+")[2]
+            print(f"client : {__version__}+{short(mine)}")
+            print(f"hub    : {theirs or 'unknown'}")
+            if not hub_tree or mine == UNKNOWN:
+                # Saying "cannot tell" is the honest answer, and it is not a
+                # failure: a client installed from a wheel has no tree to compare.
+                print("match  : cannot tell (one side does not report a build)")
+            elif short(mine) == hub_tree:
+                print("match  : yes")
+            else:
+                print("match  : NO — this client is not the code the hub is running")
+                print(
+                    "         a2a-client is an editable install pointing at a git "
+                    "checkout;\n         updating that checkout is what updates the "
+                    "client (a2a-hub#35).",
+                    file=sys.stderr,
+                )
+                return 1
 
         elif command == "agents":
             quiet_for = _quiet_for_arg(args)
