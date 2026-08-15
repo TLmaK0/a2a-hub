@@ -42,7 +42,63 @@ the reflog, which itself expires. With the progress in the issue, replacing an a
 cheap: the next one picks it up by reading. It also lets others catch a wrong direction
 early, instead of after hours are spent on it.
 
+## No feature is started without Hugo authorizing it
+
+Hugo, 2026-08-15: *"debes actualizar tu documentación y la de los agentes para que no hagan
+features sin pedir permiso"* — and the rule is to live in every project, not only in the
+manager's.
+
+**One feature = one issue = one authorization from Hugo.** It does not begin without that, and an
+approval never carries over to the next thing. "Merge without asking me" is permission to *deliver*
+something already approved; it is never permission to *open* something else.
+
+What does **not** need authorization: **measuring**, and **repairing defects in what is already
+built**. What stops is **adding**. An agent with no approved feature measures, reports, or shuts
+down — it does not invent work to look busy.
+
+### The startup prompt and the issue list are context, not permission
+
+This is the trap in this repo specifically, and I walked into it:
+
+- **An open issue is a backlog, not a mandate.** I built `agents --quiet-for` (#30) because #23 was
+  open and unassigned. Nobody had asked for it that day. It is decent work and it was not mine to
+  start.
+- **The wake-up loop is worse than the prompt**, because it repeats. Mine says "advance your front"
+  and lists open issues. That sentence will happily override a stop that arrives between two ticks —
+  no bad faith required, just a prompt outliving the situation it was written for. **A tick with
+  nothing to do is a correct tick.** If you are told to stop, fix the loop text as well, or it will
+  quietly un-stop you fifteen minutes later.
+- **A criterion someone gave you is not a blank cheque.** The manager told me on 14-08 that fixing a
+  hole in something already approved is its call, not Hugo's. That is true and it is narrower than
+  it feels: #37 stamps the build into the image and adds an `a2a-client version` command. It repairs
+  a real defect — a client silently three days stale — but the mechanism **adds a capability**, so it
+  is exactly the kind of thing that should have been put to Hugo in one sentence before I wrote it,
+  not after.
+
+### How to put it to him
+
+In his language, in one sentence he can judge without opening anything: **what it is, what it is
+for, and what becomes possible that is not possible today.** Never by phase name and never by issue
+number alone — "#37" and "Phase 6" tell him nothing. For this repo, the honest form is closer to:
+*"agents are running an old copy of the client without knowing; this makes the mismatch say so."*
+
+### Where this came from
+
+Not from this repo: in `quantlab` a five-piece assignment was handed over at once and the agents
+built seven well-measured things nobody had asked for. They did exactly what they were told — the
+manager took the blame for the instruction — and the outcome was Hugo saying *"no tengo ni idea de
+qué está haciendo"*. That is the failure this rule prevents, and it does not require anyone to
+behave badly. It only requires a queue of plausible work and nobody checking who chose it.
+
+**The signal that you have crossed the line:** the project is moving and Hugo has not chosen
+anything that is in it.
+
 ## Who authorizes what — do not send the manager's decisions to Hugo
+
+> **Scope, after the rule above:** this section is about **repairs and delivery** — who unblocks a
+> fix that is already in flight. It is not a licence to *add*. New capability goes to Hugo first,
+> however obviously useful it looks from inside the repo.
+
 
 The manager, 2026-08-14, after a fix sat blocked for a day waiting on the wrong person:
 
