@@ -436,6 +436,8 @@ def test_introduce_sends_role_projects_and_status(monkeypatch, capsys):
     seen = {}
 
     def transport(url, body, headers):
+        if url.endswith("/agents"):  # the read-back that confirms the row landed
+            return {"agents": [{"identity": "ns/a"}]}
         seen["url"] = url
         seen["body"] = json.loads(body)
         return {"identity": "ns/a", "role": "project", "host": "h",
@@ -452,6 +454,48 @@ def test_introduce_sends_role_projects_and_status(monkeypatch, capsys):
     assert seen["body"]["status"] == "on issue 17"
     assert seen["body"]["host"] == "ns3073844"
     assert "introduced ns/a" in capsys.readouterr().out
+
+
+def test_introduce_fails_loudly_when_the_row_does_not_appear(monkeypatch, capsys):
+    """A declaration that did not take must not read like one that did.
+
+    Reported by quantlab-signal-ns3073844 on 2026-08-16 after introducing itself twice
+    under a retired identity, getting 200 and its own identity back both times, and
+    working for half an hour without existing for the fleet. There is no field in the
+    response that differs, so the client has to read the register back.
+    """
+    def transport(url, body, headers):
+        if url.endswith("/agents"):
+            return {"agents": [{"identity": "ns/somebody-else"}]}
+        return {"identity": "ns/a", "role": "project", "host": "h",
+                "projects": ["quantlab"], "status": "back from a recycle"}
+
+    monkeypatch.setattr(socket, "gethostname", lambda: "ns3073844")
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["introduce", "project", "quantlab", "back"], hub) == 1
+    error = capsys.readouterr().err
+    assert "does NOT appear in the register" in error
+    assert "retired" in error  # says what to suspect, not just that it failed
+
+
+def test_introduce_does_not_cry_wolf_when_the_listing_is_unreadable(monkeypatch, capsys):
+    """An unreadable listing is not evidence that the introduction failed.
+
+    A check that raises false alarms is one people learn to ignore, and then it is
+    protecting nothing.
+    """
+    def transport(url, body, headers):
+        if url.endswith("/agents"):
+            return {"error": "boom"}
+        return {"identity": "ns/a", "role": "project", "host": "h",
+                "projects": ["quantlab"], "status": "hello"}
+
+    monkeypatch.setattr(socket, "gethostname", lambda: "ns3073844")
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["introduce", "project", "quantlab", "hello"], hub) == 0
+    assert "does NOT appear" not in capsys.readouterr().err
 
 
 def test_status_moves_only_the_status(capsys):
@@ -542,6 +586,8 @@ def test_introduce_proceeds_when_the_session_was_set_for_this_process():
     sent = {}
 
     def transport(url, body, headers):
+        if url.endswith("/agents"):
+            return {"agents": [{"identity": "ns/a"}]}
         sent["url"] = url
         return {"identity": "ns/a", "role": "project"}
 
@@ -553,6 +599,8 @@ def test_introduce_proceeds_when_the_session_was_set_for_this_process():
 
 def test_introduce_prints_warnings_it_gets_back(capsys):
     def transport(url, body, headers):
+        if url.endswith("/agents"):
+            return {"agents": [{"identity": "ns/a"}]}
         return {"identity": "ns/a", "role": "manager",
                 "warnings": ["another manager is already registered: ns/b, seen 5s ago"]}
 

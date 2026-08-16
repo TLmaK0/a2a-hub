@@ -309,6 +309,20 @@ class HubClient:
         )
 
 
+def _appears_in_register(hub: HubClient, identity: str) -> bool:
+    """Read back what we just wrote, so a silent no-op cannot pass as success.
+
+    Deliberately tolerant of its own failure: if the listing itself cannot be read we
+    return ``True`` rather than accusing a healthy introduction of having vanished. A
+    check that produces false alarms gets ignored, and then it protects nothing.
+    """
+    try:
+        listed = hub.agents().get("agents", [])
+    except ClientError:
+        return True
+    return any(entry.get("identity") == identity for entry in listed)
+
+
 def format_task(task: dict[str, Any]) -> str:
     """One-line summary of a task plus the messages it carries."""
     status = task.get("status", {})
@@ -568,6 +582,21 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
             print(f"introduced {result['identity']} as {result['role']}")
             for warning in result.get("warnings", []):
                 print(f"warning: {warning}", file=sys.stderr)
+            if not _appears_in_register(hub, result["identity"]):
+                # Suggested by quantlab-signal-ns3073844 after losing half an hour to
+                # exactly this: a declaration that does not take is indistinguishable
+                # from one that does, so the only detection available was an external
+                # check someone had to remember to run. A rule that depends on memory
+                # is a rule that fails.
+                print(
+                    f"ERROR: {result['identity']} accepted the introduction and does "
+                    "NOT appear in the register, so nobody can see you.\n"
+                    "Most likely this identity was retired: re-declaring does not undo "
+                    "a retirement on a hub older than this fix.\n"
+                    "Introduce yourself under a session name that was never retired.",
+                    file=sys.stderr,
+                )
+                return 1
 
         elif command == "status":
             if len(args) < 2:
