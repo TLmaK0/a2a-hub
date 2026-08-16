@@ -515,6 +515,31 @@ def _unknown_flags(command: str, args: list[str]) -> list[str]:
     return [a for a in args[1:] if a.startswith("--") and a not in known]
 
 
+def _free_text_or_refuse(command: str, words: list[str], hint: str) -> list[str]:
+    """Free text for a command that takes some, or a refusal if it opens with a flag.
+
+    The commands that carry prose — ``send``, ``introduce``, ``status`` — cannot use the
+    known-option table: their trailing words are the content, and content may
+    legitimately begin with dashes. That was the reason they were left unguarded, and it
+    was the wrong trade. A flag is typed where a flag goes, i.e. first, so a token
+    starting with ``--`` in that position is a misspelling far more often than it is
+    prose — and the cost of guessing wrong is not symmetric: refusing shows up
+    immediately, whereas sending a fragment of the command line as the message reports
+    success and is never noticed.
+
+    ``--`` ends option parsing, as everywhere else, so the rare genuine case survives.
+    """
+    if words and words[0] == "--":
+        return words[1:]
+    if words and words[0].startswith("--"):
+        raise ClientError(
+            f"{command}: unknown option {words[0]}\n{hint}\n"
+            "Nothing was sent. To pass text that really starts with dashes, put `--` "
+            "first."
+        )
+    return words
+
+
 def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     args = list(sys.argv[1:] if argv is None else argv)
@@ -647,11 +672,14 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
                     "usage: a2a-client introduce <role> <project[,project...]> "
                     "<what you are doing...>"
                 )
+            words = _free_text_or_refuse(
+                "introduce", args[3:], "usage: introduce <role> <projects> <status...>"
+            )
             result = hub.introduce(
                 role=args[1],
                 host=socket.gethostname(),
                 projects=[p for p in args[2].split(",") if p],
-                status=" ".join(args[3:]),
+                status=" ".join(words),
             )
             print(f"introduced {result['identity']} as {result['role']}")
             for warning in result.get("warnings", []):
@@ -675,7 +703,10 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
         elif command == "status":
             if len(args) < 2:
                 raise ClientError("usage: a2a-client status <what you are doing...>")
-            result = hub.set_status(" ".join(args[1:]))
+            words = _free_text_or_refuse(
+                "status", args[1:], "usage: status <what you are doing...>"
+            )
+            result = hub.set_status(" ".join(words))
             print(f"status of {result['identity']}: {result['status']}")
 
         elif command == "retire":
@@ -721,7 +752,7 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
                 # legitimate body that opens with dashes.
                 recipient = args[1]
                 text = " ".join(args[3:])
-            elif len(args) >= 3 and args[2].startswith("--"):
+            elif len(args) >= 3 and args[2].startswith("--"):  # noqa: SIM114
                 # Measured by quantlab-exec-ns3073844 on 2026-08-16, and it is worse
                 # than a missing feature: `send <who> --body-fil <path>` (a typo in the
                 # FLAG, not the path) exits 0, and what travels is the literal string

@@ -135,6 +135,45 @@ async def test_cli_send_then_inbox(make_client, capsys):
     assert f"from {IDENT_A}" in out
 
 
+async def test_a_misspelled_body_file_delivers_nothing_at_all(make_client, tmp_path):
+    """The regression the manager ordered, measured the way glucoskin measured it.
+
+    Not "the transport was not called" — the recipient's real mailbox, counted before
+    and after over the real protocol. glucoskin-ns3073844 found this by watching their
+    own mailbox go 288 -> 289 while the document stayed on disk: `--body-fil` sent the
+    literal string "--body-fil /path" and reported COMPLETED.
+
+    Asserting the count is what makes this a regression test rather than a restatement
+    of the implementation: it fails for ANY future way of turning a typo into a
+    delivery, not only for the branch that does it today.
+    """
+    sender = make_client(AGENT_A, TOKEN_A)
+    recipient = make_client(AGENT_B, TOKEN_B)
+    body = tmp_path / "handover.md"
+    body.write_text("the whole handover, which must not be replaced by its own path")
+
+    before = (await run(recipient.list_tasks))["totalSize"]
+
+    assert await run(main, ["send", IDENT_B, "--body-fil", str(body)], client=sender) != 0
+
+    after = await run(recipient.list_tasks)
+    assert after["totalSize"] == before, "a misspelled flag delivered a message"
+
+
+async def test_the_correct_flag_still_delivers_the_file_itself(make_client, tmp_path):
+    """The control: without it, a client that sent nothing at all would also pass."""
+    sender = make_client(AGENT_A, TOKEN_A)
+    recipient = make_client(AGENT_B, TOKEN_B)
+    body = tmp_path / "handover.md"
+    body.write_text("the whole handover, which must not be replaced by its own path")
+
+    assert await run(main, ["send", IDENT_B, "--body-file", str(body)], client=sender) == 0
+
+    inbox = await run(recipient.list_tasks)
+    assert inbox["totalSize"] == 1
+    assert inbox["tasks"][0]["artifacts"][0]["parts"][0]["text"] == body.read_text()
+
+
 async def test_cli_inbox_json_and_read(make_client, capsys):
     sender = make_client(AGENT_A, TOKEN_A)
     recipient = make_client(AGENT_B, TOKEN_B)
@@ -1032,3 +1071,59 @@ def test_send_can_still_carry_text_that_starts_with_dashes(capsys):
     assert main(["send", "ns/b", "--", "--look", "at", "this"], hub) == 0
     parts = seen["body"]["params"]["message"]["parts"]
     assert parts[0]["text"] == "--look at this"
+
+
+# --- the whole family of flags, ordered by the manager 2026-08-16 -------------
+#
+# "If the parser accepts unknown options in one place, it accepts them everywhere."
+# Every command that takes free text gets the same rule, and every test below asserts
+# the two things the order demands: a non-zero exit AND zero messages delivered.
+
+def _transport_that_must_not_be_called(*_a, **_k):
+    raise AssertionError("nothing may reach the hub when the command line is wrong")
+
+
+def test_introduce_refuses_an_unknown_flag_and_registers_nothing(capsys):
+    hub = HubClient(_config(), transport=_transport_that_must_not_be_called)
+
+    assert main(["introduce", "project", "quantlab", "--stauts", "working"], hub) == 1
+    assert "unknown option --stauts" in capsys.readouterr().err
+
+
+def test_status_refuses_an_unknown_flag_and_sends_nothing(capsys):
+    hub = HubClient(_config(), transport=_transport_that_must_not_be_called)
+
+    assert main(["status", "--jsno", "still on issue 41"], hub) == 1
+    assert "unknown option --jsno" in capsys.readouterr().err
+
+
+def test_introduce_and_status_still_accept_text_that_starts_with_dashes(monkeypatch):
+    """The refusal must not cost anyone a legitimate line opening with dashes."""
+    seen = {}
+
+    def transport(url, body, headers):
+        seen[url] = json.loads(body)
+        return {"identity": "ns/a", "role": "project", "status": "x",
+                "agents": [{"identity": "ns/a"}]}
+
+    monkeypatch.setattr(socket, "gethostname", lambda: "h")
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["status", "--", "--now", "measuring"], hub) == 0
+    assert seen["https://hub.test/agents/status"]["status"] == "--now measuring"
+
+
+def test_every_command_that_takes_free_text_is_guarded():
+    """A list is a promise; this checks the promise against the code.
+
+    The gap this closes existed because two commands were reasoned about separately
+    from the other six. Enumerating them here means the next command added has to
+    decide, explicitly, which side of the rule it is on.
+    """
+    hub = HubClient(_config(), transport=_transport_that_must_not_be_called)
+
+    assert main(["send", "ns/b", "--body-fil", "/tmp/x"], hub) != 0
+    assert main(["introduce", "project", "x", "--stauts", "y"], hub) != 0
+    assert main(["status", "--bogus", "y"], hub) != 0
+    for command in ("agents", "inbox", "read", "whoami", "retire"):
+        assert main([command, "--bogus"], hub) != 0, command
