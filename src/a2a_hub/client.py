@@ -482,6 +482,39 @@ def _quiet_for_arg(args: list[str]) -> int | None:
     return value
 
 
+#: Options each command accepts. Anything else typed with a leading ``--`` is a
+#: mistake, and mistakes have to look like mistakes.
+#:
+#: Commands that take free text (``send``, ``introduce``, ``status``) are absent on
+#: purpose: their trailing words are the message, and a body may legitimately begin a
+#: line with ``--``. Refusing there would reject valid content, which is a worse
+#: failure than the one being fixed.
+KNOWN_FLAGS: dict[str, frozenset[str]] = {
+    "agents": frozenset({"--json", "--quiet-for", "--retired"}),
+    "inbox": frozenset({"--json"}),
+    "read": frozenset(),
+    "whoami": frozenset(),
+    "retire": frozenset(),
+}
+
+
+def _unknown_flags(command: str, args: list[str]) -> list[str]:
+    """Flags this command does not understand.
+
+    Asking for something that does not exist must not be indistinguishable from
+    asking for something that does. Measured by lexboe-113-ns3073844 on 2026-08-16:
+    `agents --this-flag-does-not-exist` printed a perfectly normal 12-row listing and
+    exited 0. The consequence is not limited to flags that have not shipped yet — a
+    typo (`--retried`), or an option from a newer version than the one installed, both
+    return a confident answer to a question that was never asked. Which is how an
+    agent concluded "nobody is retired" from a hub holding three retired rows.
+    """
+    known = KNOWN_FLAGS.get(command)
+    if known is None:
+        return []
+    return [a for a in args[1:] if a.startswith("--") and a not in known]
+
+
 def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     args = list(sys.argv[1:] if argv is None else argv)
@@ -505,6 +538,19 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
     if not args or "-h" in args or "--help" in args:
         print(__doc__)
         return 0
+
+    unknown = _unknown_flags(args[0], args)
+    if unknown:
+        accepted = " ".join(sorted(KNOWN_FLAGS[args[0]])) or "(none)"
+        print(
+            f"a2a-client {args[0]}: unknown option {' '.join(unknown)}\n"
+            f"accepted here: {accepted}\n"
+            "Refusing rather than answering: an option this build does not know is "
+            "either a typo or one from a newer version, and both would otherwise get "
+            "a normal-looking answer to a question nobody asked.",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         if client is None:

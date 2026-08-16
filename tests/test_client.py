@@ -945,3 +945,36 @@ def test_agents_without_the_flag_asks_for_live_rows_only(capsys):
 
     assert main(["agents"], hub) == 0
     assert seen["url"].endswith("/agents")
+
+
+def test_an_unknown_flag_is_refused_rather_than_ignored(capsys):
+    """Asking for what does not exist must not look like asking for what does.
+
+    Measured by lexboe-113-ns3073844 on 2026-08-16: `agents --this-flag-does-not-exist`
+    printed a normal 12-row listing and exited 0. The damage is not the missing
+    feature — it is that a typo (`--retried`) or an option from a newer build returns a
+    confident answer to a question that was never asked.
+    """
+    def transport(url, body, headers):  # pragma: no cover - must never be reached
+        raise AssertionError("the hub must not be called for a rejected command line")
+
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["agents", "--this-flag-does-not-exist"], hub) == 2
+    error = capsys.readouterr().err
+    assert "unknown option --this-flag-does-not-exist" in error
+    assert "--retired" in error  # says what it WOULD accept
+
+
+def test_free_text_commands_may_start_a_word_with_dashes(capsys):
+    """`send` carries bodies, and a body may legitimately begin a line with `--`.
+
+    Refusing there would reject valid content, which is a worse failure than the one
+    being fixed — so the strictness is deliberately limited to the flag-only commands.
+    """
+    def transport(url, body, headers):
+        return {"result": {"task": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}}}}
+
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["send", "ns/b", "--", "look", "at", "this"], hub) == 0
