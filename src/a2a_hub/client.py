@@ -537,6 +537,15 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
     # are least welcome.
     if not args or "-h" in args or "--help" in args:
         print(__doc__)
+        # And, when help was asked *about a command*, what that command accepts.
+        # Reported by glucoskin-ns3073844: `agents --help` printed the module
+        # docstring, exactly like `inbox --help`, so there was no way to discover a
+        # subcommand's options at all — you could not ask the tool, and typing a wrong
+        # flag did not correct you either. Discovery by error message is not
+        # discovery.
+        if args and args[0] in KNOWN_FLAGS:
+            accepted = " ".join(sorted(KNOWN_FLAGS[args[0]])) or "(no options)"
+            print(f"options for {args[0]}: {accepted}")
         return 0
 
     unknown = _unknown_flags(args[0], args)

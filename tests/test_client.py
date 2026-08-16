@@ -978,3 +978,24 @@ def test_free_text_commands_may_start_a_word_with_dashes(capsys):
     hub = HubClient(_config(), transport=transport)
 
     assert main(["send", "ns/b", "--", "look", "at", "this"], hub) == 0
+
+
+def test_help_for_a_command_says_what_that_command_accepts(capsys):
+    """`agents --help` printed the same module docstring as `inbox --help`.
+
+    Reported by glucoskin-ns3073844 as the reason nobody could tell whether `agents`
+    took a `--retired` flag: help did not say, and a wrong flag did not correct you.
+    """
+    hub = HubClient(_config(), transport=lambda *a: {})
+
+    assert main(["agents", "--help"], hub) == 0
+    out = capsys.readouterr().out
+    assert "options for agents:" in out
+    assert "--quiet-for" in out and "--retired" in out
+
+
+def test_help_for_a_command_with_no_options_says_so(capsys):
+    hub = HubClient(_config(), transport=lambda *a: {})
+
+    assert main(["whoami", "--help"], hub) == 0
+    assert "options for whoami: (no options)" in capsys.readouterr().out
