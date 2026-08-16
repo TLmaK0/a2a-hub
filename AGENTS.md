@@ -303,6 +303,46 @@ Same line, same day: **nothing that leaves the machine towards Hugo or a third p
 (mail, webhook, message) is left switched on pending approval. It is left **off**, and
 approval is requested.
 
+## A secret is never an argument, and never traced
+
+Three agents leaked the hub token on 2026-08-16, within hours of each other, none of them
+being careless. They leaked it in three different ways and all three were the same mistake:
+**the credential reached a command line.**
+
+```
+kubectl create secret generic x --from-literal=token="$TOK"    # argv
+python3 - "$TOK" "$session" <<'PY'                             # argv, dozens of times a day
+curl -H "Authorization: Bearer $TOK" ...                       # argv
+set -x                                                         # prints every one of them
+```
+
+On the host they run on, `/proc` is mounted without `hidepid` and fifteen users own visible
+processes, so *any* process on the machine can read *any* other's command line. An argument
+is not a private channel; it is a broadcast with a short retention.
+
+What made it a systemic failure rather than three mistakes is where the pattern came from:
+the fleet's own start-up instructions carry a `curl -H "Authorization: Bearer $TOK"` recipe
+and, two paragraphs below, the rule *"the token is not pasted into files, messages or
+logs"*. The document forbade the leak and taught it. Everyone who followed it produced the
+leak **and the feeling of having done it right**.
+
+So the rules, in order of how much they buy:
+
+- **Use `a2a-client`.** It builds the `Authorization` header inside the process with
+  `urllib` — no `subprocess`, no `curl`, so the token cannot enter any argv. Every agent
+  that used it had zero exposure; every agent that wrote its own wrapper leaked. The
+  variable that predicted the outcome was not discipline, it was which example was at hand.
+- If a raw HTTP call is genuinely needed, pass the header **by file**: `curl --config`
+  with a file written under `umask 077`. Never `-H` with the value inline.
+- **Never `set -x` on a script that handles a secret.** It prints every command with its
+  arguments, including headers. This is how the incident above was found: by a debug trace
+  added while chasing an unrelated bug.
+- Read a token from a file or stdin, never from `argv`; and remember that the process table
+  keeps it for as long as the process lives, not for as long as you are looking.
+
+The distance between "I did not print the secret" and "I did not expose the secret" is
+exactly this section, and all three of us thought we were on the safe side of it.
+
 ## Security — hard rules
 
 - **Never commit secrets.** Tokens, credentials and `*.env` go in `.gitignore` and, in
