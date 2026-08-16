@@ -716,6 +716,30 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
                     text = pathlib.Path(args[3]).read_text(encoding="utf-8")
                 except OSError as error:
                     raise ClientError(f"cannot read {args[3]}: {error}") from error
+            elif len(args) >= 3 and args[2] == "--":
+                # The escape hatch, so refusing the typo below cannot cost anyone a
+                # legitimate body that opens with dashes.
+                recipient = args[1]
+                text = " ".join(args[3:])
+            elif len(args) >= 3 and args[2].startswith("--"):
+                # Measured by quantlab-exec-ns3073844 on 2026-08-16, and it is worse
+                # than a missing feature: `send <who> --body-fil <path>` (a typo in the
+                # FLAG, not the path) exits 0, and what travels is the literal string
+                # "--body-fil /path/to/file". The document never leaves, the sender sees
+                # COMPLETED, and the recipient gets a path they cannot read.
+                #
+                # A wrong PATH already fails loudly before sending anything; a wrong
+                # FLAG NAME did not. This is the case an earlier commit in this branch
+                # deliberately left out, on the grounds that a body may legitimately
+                # begin with `--`. That was the wrong trade: sending the wrong thing
+                # silently costs more than refusing, and `--` above keeps the rare case
+                # available.
+                raise ClientError(
+                    f"send: unknown option {args[2]}\n"
+                    "Did you mean --body-file? A body is not sent when the flag is "
+                    "misspelled: it would travel as the literal text of your command.\n"
+                    "To send text that really starts with dashes, put `--` first."
+                )
             elif len(args) >= 3:
                 recipient = args[1]
                 text = " ".join(args[2:])

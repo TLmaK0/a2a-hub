@@ -999,3 +999,36 @@ def test_help_for_a_command_with_no_options_says_so(capsys):
 
     assert main(["whoami", "--help"], hub) == 0
     assert "options for whoami: (no options)" in capsys.readouterr().out
+
+
+def test_send_refuses_a_misspelled_body_file_instead_of_sending_the_flag(capsys):
+    """A typo in the FLAG sent the flag itself as the message, and reported success.
+
+    Measured by quantlab-exec-ns3073844 against their own mailbox: with
+    `--body-fil <path>` the call exited 0, the mailbox grew by one, and the body that
+    arrived was the literal string "--body-fil /path/...". A wrong *path* already
+    failed loudly before sending; a wrong *flag name* did not.
+    """
+    def transport(url, body, headers):  # pragma: no cover - must never be reached
+        raise AssertionError("nothing may be sent when the command line is wrong")
+
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["send", "ns/b", "--body-fil", "/tmp/note.md"], hub) == 1
+    error = capsys.readouterr().err
+    assert "Did you mean --body-file?" in error
+
+
+def test_send_can_still_carry_text_that_starts_with_dashes(capsys):
+    """The refusal above must not cost anyone a legitimate body opening with dashes."""
+    seen = {}
+
+    def transport(url, body, headers):
+        seen["body"] = json.loads(body)
+        return {"result": {"task": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}}}}
+
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["send", "ns/b", "--", "--look", "at", "this"], hub) == 0
+    parts = seen["body"]["params"]["message"]["parts"]
+    assert parts[0]["text"] == "--look at this"
