@@ -905,3 +905,43 @@ def test_help_after_a_subcommand_prints_help_and_does_nothing_else(capsys):
 def test_help_still_works_on_its_own(capsys):
     assert main(["--help"]) == 0
     assert "a2a-client inbox" in capsys.readouterr().out
+
+
+def test_agents_can_ask_for_retired_rows_and_marks_them(capsys):
+    """`retired_at` was rendered by a client that could never fetch a row carrying it.
+
+    Reported by glucoskin-ns3073844: the field looked like information and was
+    structurally incapable of holding any, because the CLI never passed
+    `retired=true`. The one question that needs it — "has anyone introduced
+    themselves under this retired name?" — could only be answered by hand-writing the
+    HTTP call, which is how two agents lost time on 2026-08-16.
+    """
+    seen = {}
+
+    def transport(url, body, headers):
+        seen["url"] = url
+        return {"agents": [{
+            "identity": "ns/gone", "declared": True, "role": "project",
+            "projects": ["quantlab"], "status": "was here",
+            "last_seen_seconds": 30, "retired_at": "2026-08-15T19:14:09Z",
+        }]}
+
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["agents", "--retired"], hub) == 0
+    assert seen["url"].endswith("/agents?retired=true")
+    assert "[RETIRED]" in capsys.readouterr().out
+
+
+def test_agents_without_the_flag_asks_for_live_rows_only(capsys):
+    """The default stays the question people actually ask: who is here now."""
+    seen = {}
+
+    def transport(url, body, headers):
+        seen["url"] = url
+        return {"agents": []}
+
+    hub = HubClient(_config(), transport=transport)
+
+    assert main(["agents"], hub) == 0
+    assert seen["url"].endswith("/agents")

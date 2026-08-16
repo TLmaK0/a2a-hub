@@ -26,7 +26,7 @@ CLI::
     a2a-client introduce <role> <project[,project...]> <what you are doing...>
     a2a-client status <what you are doing...>
     a2a-client retire
-    a2a-client agents [--json] [--quiet-for SECONDS]
+    a2a-client agents [--json] [--quiet-for SECONDS] [--retired]
     a2a-client [--session NAME] ...      # overrides A2A_HUB_SESSION
 """
 
@@ -218,13 +218,27 @@ class HubClient:
         """Withdraw my registration. Retired, not deleted."""
         return self._http("/agents/retire", {})
 
-    def agents(self, quiet_for: int | None = None) -> dict[str, Any]:
+    def agents(
+        self, quiet_for: int | None = None, *, retired: bool = False
+    ) -> dict[str, Any]:
         """Who else is connected, what they are, and when they were last seen.
 
         With ``quiet_for``, only those the hub has not heard from for that many
         seconds — the question "who has gone quiet?", asked rather than eyeballed.
+
+        With ``retired``, withdrawn rows come too. The route has always accepted it
+        and this client never asked, which made ``retired_at`` a field that is
+        rendered and can never be anything but null — information-shaped, and
+        incapable of carrying information. Reported by glucoskin-ns3073844 after the
+        only question that needed it ("has anyone introduced themselves under this
+        retired name?") could be answered solely by hand-writing the HTTP call.
         """
-        path = "/agents" if quiet_for is None else f"/agents?quiet_for={quiet_for}"
+        params = []
+        if quiet_for is not None:
+            params.append(f"quiet_for={quiet_for}")
+        if retired:
+            params.append("retired=true")
+        path = "/agents" + ("?" + "&".join(params) if params else "")
         return self._http(path, None)
 
     def list_tasks(
@@ -369,8 +383,13 @@ def format_agent(agent: dict[str, Any]) -> str:
     silent = " [SILENT]" if seconds is not None and seconds > SILENT_AFTER else ""
 
     projects = ",".join(agent.get("projects") or []) or "-"
+    # A withdrawn row looks exactly like a live one otherwise, and it is the row that
+    # matters most when you go looking: an identity that was retired cannot be
+    # re-declared on an older hub, so introducing yourself under it leaves you
+    # invisible while the call returns 200.
+    withdrawn = " [RETIRED]" if agent.get("retired_at") else ""
     return (
-        f"[{seen:>9}]{silent} {agent['identity']} {agent.get('role')} "
+        f"[{seen:>9}]{silent}{withdrawn} {agent['identity']} {agent.get('role')} "
         f"{projects} ::{stale} {agent.get('status') or '-'}"
     )
 
@@ -610,7 +629,7 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
 
         elif command == "agents":
             quiet_for = _quiet_for_arg(args)
-            result = hub.agents(quiet_for)
+            result = hub.agents(quiet_for, retired="--retired" in args)
             if "--json" in args:
                 print(json.dumps(result, indent=2))
             else:
