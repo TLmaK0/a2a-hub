@@ -221,6 +221,18 @@ class AgentRegistry:
             "status": declaration["status"],
             "declared_at": now,
             "last_seen": now,
+            # Introducing yourself un-retires you. Without this the row keeps the
+            # `retired_at` it was given, so a re-introduction returns 200 with the
+            # caller's own identity echoed back and leaves them **invisible** in the
+            # listing — the caller cannot tell a successful registration from one that
+            # silently did not take.
+            #
+            # It is not a corner case: session names are reused across handovers, so a
+            # replacement that introduces itself under the name its predecessor was
+            # retired under is born invisible and believes it announced itself. Measured
+            # in production on 2026-08-16, on a row whose declaration was two minutes
+            # NEWER than its retirement and still absent from `/agents`.
+            "retired_at": None,
         }
         statement = sqlite_insert(registrations).values(**values)
         statement = statement.on_conflict_do_update(

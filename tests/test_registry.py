@@ -335,6 +335,44 @@ async def test_a_withdrawn_registration_is_kept_not_deleted(client):
     assert entry["role"] == "manager"  # what it claimed survives the withdrawal
 
 
+async def test_introducing_yourself_again_undoes_a_retirement(client):
+    """Coming back has to be possible, and it has to be *visible*.
+
+    Session names are reused across handovers, so a replacement introduces itself under
+    the very name its predecessor was retired under. Before this, `declare` left
+    `retired_at` untouched: the call returned 200 with the caller's own identity echoed
+    back and the agent stayed absent from the listing, with no way to tell. Measured in
+    production on 2026-08-16 on a row whose `declared_at` was newer than its
+    `retired_at`.
+    """
+    await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_A))
+    await client.post(RETIRE, headers=auth(TOKEN_A))
+
+    again = await client.post(
+        REGISTER, json=declaration(status="back from the dead"), headers=auth(TOKEN_A)
+    )
+    assert again.status_code == 200
+
+    listed = (await client.get(LIST, headers=auth(TOKEN_B))).json()["agents"]
+    entry = find(listed, IDENT_A)
+    assert entry is not None, "a re-introduced agent must be visible again"
+    assert entry["status"] == "back from the dead"
+
+
+async def test_retiring_again_after_coming_back_is_allowed(client):
+    """The un-retire must be real, not cosmetic: retire refuses an already-retired row.
+
+    If `declare` only *hid* the retirement, this second retire would 409 — which is the
+    cheap way to prove the flag was actually cleared rather than merely ignored by the
+    listing.
+    """
+    await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_A))
+    await client.post(RETIRE, headers=auth(TOKEN_A))
+    await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_A))
+
+    assert (await client.post(RETIRE, headers=auth(TOKEN_A))).status_code == 200
+
+
 async def test_retiring_twice_is_refused(client):
     await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_A))
     await client.post(RETIRE, headers=auth(TOKEN_A))
