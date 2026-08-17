@@ -1127,3 +1127,133 @@ def test_every_command_that_takes_free_text_is_guarded():
     assert main(["status", "--bogus", "y"], hub) != 0
     for command in ("agents", "inbox", "read", "whoami", "retire"):
         assert main([command, "--bogus"], hub) != 0, command
+
+
+# --- CLI: message marks, driven the way the fleet will drive them -----------
+
+async def test_cli_marks_a_message_and_hides_it_from_the_unprocessed_inbox(
+    make_client, capsys
+):
+    """The whole point, end to end: close a message and stop seeing it.
+
+    Driven through the CLI rather than the routes, because the CLI is what the fleet
+    actually runs — the shared binary is where "implemented" and "what the others
+    see" have come apart in this repo before.
+    """
+    sender = make_client(AGENT_A, TOKEN_A)
+    recipient = make_client(AGENT_B, TOKEN_B)
+
+    sent = await run(sender.send_message, IDENT_B, "close me")
+    task_id = sent["task"]["id"]
+    kept = await run(sender.send_message, IDENT_B, "leave me open")
+    kept_id = kept["task"]["id"]
+    capsys.readouterr()
+
+    assert (
+        await run(
+            main,
+            ["processed", task_id, "acted", "in", "sha", "deadbeef"],
+            client=recipient,
+        )
+        == 0
+    )
+    assert f"processed: {task_id}" in capsys.readouterr().out
+
+    assert await run(main, ["inbox", "--unprocessed"], client=recipient) == 0
+    out = capsys.readouterr().out
+    assert "leave me open" in out
+    assert "close me" not in out
+    assert "1 already closed by you" in out
+
+    # And the unfiltered mailbox still holds both: the compatibility promise.
+    assert await run(main, ["inbox"], client=recipient) == 0
+    both = capsys.readouterr().out
+    assert "close me" in both and "leave me open" in both
+    # Ids are printed shortened, so compare on the prefix the listing actually shows.
+    assert kept_id[:8] in both and task_id[:8] in both
+
+
+async def test_cli_awaiting_is_not_hidden_because_it_is_not_closed(make_client, capsys):
+    """A message parked on a decision is still owed an answer, so it stays visible."""
+    sender = make_client(AGENT_A, TOKEN_A)
+    recipient = make_client(AGENT_B, TOKEN_B)
+    sent = await run(sender.send_message, IDENT_B, "needs the owner")
+    task_id = sent["task"]["id"]
+    capsys.readouterr()
+
+    await run(
+        main,
+        ["awaiting", task_id, "which", "window", "does", "this", "ride?"],
+        client=recipient,
+    )
+    capsys.readouterr()
+
+    await run(main, ["inbox", "--unprocessed"], client=recipient)
+    assert "needs the owner" in capsys.readouterr().out
+
+
+async def test_cli_marks_listing_and_the_sender_side(make_client, capsys):
+    sender = make_client(AGENT_A, TOKEN_A)
+    recipient = make_client(AGENT_B, TOKEN_B)
+    sent = await run(sender.send_message, IDENT_B, "report back")
+    task_id = sent["task"]["id"]
+    await run(
+        main, ["discarded", task_id, "not", "mine", "to", "do"], client=recipient
+    )
+    capsys.readouterr()
+
+    assert await run(main, ["marks"], client=recipient) == 0
+    mine = capsys.readouterr().out
+    assert "you have marked 1 message(s)" in mine
+    assert "discarded" in mine
+
+    # The sender asks what happened to what they sent — the question the feature
+    # exists for, and the half a recipient-only view could never answer.
+    assert await run(main, ["marks", "--sent"], client=sender) == 0
+    theirs = capsys.readouterr().out
+    assert "what recipients did with messages you sent: 1" in theirs
+    assert "not mine to do" in theirs
+    assert IDENT_B in theirs
+
+
+async def test_cli_refuses_a_mark_with_no_detail(make_client, capsys):
+    """Refusing is the feature. It must also say what would have satisfied it."""
+    sender = make_client(AGENT_A, TOKEN_A)
+    recipient = make_client(AGENT_B, TOKEN_B)
+    sent = await run(sender.send_message, IDENT_B, "no ref for this")
+    task_id = sent["task"]["id"]
+    capsys.readouterr()
+
+    assert await run(main, ["processed", task_id], client=recipient) == 1
+    err = capsys.readouterr().err
+    assert "nothing was recorded" in err
+    assert "this needs a ref" in err
+    # And with no task id at all, the usage line.
+    assert await run(main, ["processed"], client=recipient) == 1
+    assert "usage: a2a-client processed" in capsys.readouterr().err
+
+    # Nothing was recorded, and that is checked against the hub, not the output.
+    assert await run(main, ["marks"], client=recipient) == 0
+    assert "you have marked 0 message(s)" in capsys.readouterr().out
+
+
+async def test_cli_mark_commands_refuse_an_unknown_flag_in_the_text_slot(
+    make_client, capsys
+):
+    """Same hole that was closed for send/introduce: a typo must not become the ref."""
+    sender = make_client(AGENT_A, TOKEN_A)
+    recipient = make_client(AGENT_B, TOKEN_B)
+    sent = await run(sender.send_message, IDENT_B, "watch the flag")
+    task_id = sent["task"]["id"]
+    capsys.readouterr()
+
+    assert await run(main, ["processed", task_id, "--ref", "abc"], client=recipient) == 1
+    assert "unknown option --ref" in capsys.readouterr().err
+
+    assert await run(main, ["marks"], client=recipient) == 0
+    assert "you have marked 0 message(s)" in capsys.readouterr().out
+
+
+async def test_cli_marks_help_lists_the_options(capsys):
+    assert main(["marks", "--help"]) == 0
+    assert "options for marks: --json --sent" in capsys.readouterr().out
