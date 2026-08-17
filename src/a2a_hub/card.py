@@ -20,6 +20,7 @@ from a2a.types.a2a_pb2 import (
 from a2a.utils import TransportProtocol
 
 from a2a_hub import __version__
+from a2a_hub.routes_marks import MARKS_EXTENSION_URI
 from a2a_hub.routes_registry import REGISTRY_EXTENSION_URI
 
 
@@ -66,7 +67,17 @@ def build_agent_card(public_url: str, rpc_url: str = "/") -> AgentCard:
                         "claim to be alive. POST /agents/register, GET /agents."
                     ),
                     required=False,
-                )
+                ),
+                AgentExtension(
+                    uri=MARKS_EXTENSION_URI,
+                    description=(
+                        "Recipients mark a message processed, discarded or awaiting "
+                        "a decision, each with the detail that close required; the "
+                        "sender may read what happened to what they sent. "
+                        "POST/GET /messages/{task_id}/mark, GET /messages/marks."
+                    ),
+                    required=False,
+                ),
             ],
         ),
         default_input_modes=["text/plain"],

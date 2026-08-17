@@ -27,6 +27,11 @@ CLI::
     a2a-client status <what you are doing...>
     a2a-client retire
     a2a-client agents [--json] [--quiet-for SECONDS] [--retired]
+    a2a-client processed <task-id> <where you acted: comment url, sha, reply id>
+    a2a-client discarded <task-id> <why it needed nothing>
+    a2a-client awaiting  <task-id> <the question waiting for a decision>
+    a2a-client marks [--json] [--sent]   # what I closed / what happened to mine
+    a2a-client inbox --unprocessed       # hide what I have already closed
     a2a-client [--session NAME] ...      # overrides A2A_HUB_SESSION
 """
 
@@ -240,6 +245,26 @@ class HubClient:
             params.append("retired=true")
         path = "/agents" + ("?" + "&".join(params) if params else "")
         return self._http(path, None)
+
+    def mark(self, task_id: str, state: str, detail: str) -> dict[str, Any]:
+        """Mark a message I received: processed, discarded or awaiting a decision.
+
+        The detail is not decoration. A mark that costs nothing would be pressed by a
+        loop that never read the body, and we would have built a green that certifies
+        itself — so `processed` costs the ref, `discarded` the reason, `awaiting` the
+        question.
+        """
+        return self._http(
+            f"/messages/{task_id}/mark", {"state": state, "detail": detail}
+        )
+
+    def mark_of(self, task_id: str) -> dict[str, Any]:
+        """What happened to one message: mine to read as its recipient or its sender."""
+        return self._http(f"/messages/{task_id}/mark", None)
+
+    def marks(self, *, sent: bool = False) -> dict[str, Any]:
+        """What I have marked, or what recipients did with what I sent."""
+        return self._http("/messages/marks" + ("?sent=true" if sent else ""), None)
 
     def list_tasks(
         self,
@@ -559,7 +584,8 @@ def _quiet_for_arg(args: list[str]) -> int | None:
 #: failure than the one being fixed.
 KNOWN_FLAGS: dict[str, frozenset[str]] = {
     "agents": frozenset({"--json", "--quiet-for", "--retired"}),
-    "inbox": frozenset({"--json"}),
+    "inbox": frozenset({"--json", "--unprocessed"}),
+    "marks": frozenset({"--json", "--sent"}),
     "read": frozenset(),
     "whoami": frozenset(),
     "retire": frozenset(),
@@ -727,6 +753,26 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
                 and split["session"] == 0
                 and not _declared_in_register(hub, hub.config.identity)
             )
+            # Everything above measures the READ, so it is computed before the filter
+            # below removes anything: `returned`/`total` answer "did I get my whole
+            # mailbox", and hiding what you closed yourself is not a short read. The
+            # branch this came from filtered first, which made `--unprocessed` print
+            # "this is NOT your whole mailbox" as soon as one message was closed —
+            # a false alarm on the one warning that has to stay trustworthy.
+            if "--unprocessed" in args:
+                # The server still returns the whole mailbox — that is deliberate, so
+                # an old client sees exactly what it always saw. What is filtered is
+                # what this identity has already CLOSED, and `awaiting` is not closed:
+                # a message parked on a decision is still owed an answer, and hiding
+                # it would be the ignoring this feature exists to stop.
+                closed = set(hub.marks().get("closed", []))
+                tasks = result.get("tasks", [])
+                kept = [t for t in tasks if t.get("id") not in closed]
+                result = {
+                    **result,
+                    "tasks": kept,
+                    "hiddenClosed": len(tasks) - len(kept),
+                }
             if "--json" in args:
                 # Additive keys: a poll loop reads `tasks` and cannot break on these,
                 # and the loops are precisely who inherits a mistyped session from a
@@ -766,8 +812,72 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
                         f"WARNING: read {returned} of {total} — this is NOT your whole "
                         "mailbox. Older messages are missing."
                     )
+                if "hiddenClosed" in result:
+                    # Say what was hidden and by whom it was closed. A filter that
+                    # silently shrinks a list is the same animal as a bounded query
+                    # answering less than it was asked for.
+                    print(
+                        f"{result['hiddenClosed']} already closed by you "
+                        "(processed/discarded) and hidden; anything awaiting a "
+                        "decision is still shown."
+                    )
                 for task in result.get("tasks", []):
                     print(format_task(task))
+
+        elif command in {"processed", "discarded", "awaiting"}:
+            if len(args) < 2:
+                print(
+                    f"usage: a2a-client {command} <task-id> <"
+                    + {
+                        "processed": "where you acted: comment url, sha or reply id",
+                        "discarded": "why it needed nothing",
+                        "awaiting": "the question waiting for a decision",
+                    }[command]
+                    + ">",
+                    file=sys.stderr,
+                )
+                return 1
+            task_id = args[1]
+            words = _free_text_or_refuse(
+                command,
+                args[2:],
+                f"usage: a2a-client {command} <task-id> <text...>",
+            )
+            detail = " ".join(words).strip()
+            if not detail:
+                print(
+                    f"a2a-client {command}: nothing was recorded — this needs "
+                    f"{'a ref' if command == 'processed' else 'a reason' if command == 'discarded' else 'the question'}"
+                    ", and the requirement is the point: a mark that costs nothing "
+                    "proves nothing.",
+                    file=sys.stderr,
+                )
+                return 1
+            result = hub.mark(task_id, command, detail)
+            print(f"{result['state']}: {result['task_id']}")
+
+        elif command == "marks":
+            sent = "--sent" in args
+            result = hub.marks(sent=sent)
+            if "--json" in args:
+                print(json.dumps(result, indent=2))
+            elif sent:
+                rows = result.get("sent", [])
+                print(f"what recipients did with messages you sent: {len(rows)}")
+                for row in rows:
+                    print(
+                        f"[{row['state']:>9}] {row['task_id']} "
+                        f"by {row['identity']} :: {row['detail']}"
+                    )
+            else:
+                marked = result.get("marked", {})
+                closed = set(result.get("closed", []))
+                print(
+                    f"you have marked {len(marked)} message(s); "
+                    f"{len(closed)} closed, {len(marked) - len(closed)} awaiting"
+                )
+                for task_id, state in sorted(marked.items(), key=lambda kv: kv[1]):
+                    print(f"[{state:>9}] {task_id}")
 
         elif command == "introduce":
             if hub.config.session_from_shared_file:
