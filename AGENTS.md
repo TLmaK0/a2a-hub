@@ -311,9 +311,32 @@ being **late**. Late costs you a slow window. **Early costs the fleet an unannou
 and is the same drift seen from the other side.
 
 So the announced minute is not enough on its own: **a window is only a window if nothing else
-can reach the cluster during it.** Disable the bump's schedule for the duration and re-enable
-it immediately afterwards — and *verify* the re-enable, because a deploy path silently switched
-off is the failure that once left production three days behind while every run reported success.
+can reach the cluster during it.**
+
+**Close that door with a hold that EXPIRES BY ITSELF, not by switching the deploy path off.**
+This corrected an instruction that used to live here — "disable the bump's schedule and re-enable
+it afterwards" — which the infra repo had already stopped doing, for three reasons worth carrying:
+
+- **A workflow that is off is invisible.** Nothing reports it. A deploy path silently switched
+  off is the failure that once left production three days behind while every run reported success,
+  and the re-enable is a step a tired agent skips at the end of a window that already went long.
+- **Disabling also blocks the hand dispatch**, which is the path the window itself needs — so it
+  forces a re-enable at the most delicate minute of the whole operation.
+- **A hold that cannot expire is just a new way to lose deployment.** The one that exists heals
+  itself: past its timestamp it is ignored *loudly*, with a warning naming the command to clear it,
+  rather than quietly continuing to block.
+
+So: set the hold to a timestamp a little past the window, do the work, clear it, and **verify it is
+cleared**. Check first that no hold was left behind by someone else — an inherited hold is
+indistinguishable from a healthy pipeline until you notice nothing has deployed for a day.
+
+**And measure whether the scheduled deploy can reach the cluster at all before planning around it.**
+Read the *jobs*, not the run conclusion: a red run whose jobs show `steps=0` on a hosted runner
+never started, so it deployed nothing and will deploy nothing — that is an infrastructure outage,
+not a code failure, and it decides whether the window needs a hold or a hand deploy. A red run with
+`steps>0` is your code and means the opposite. Measured 2026-08-17: the last three scheduled bumps
+were `failure` with `steps=0` on `ubuntu-latest`, i.e. the pipeline could not have deployed anything
+even unheld — which is exactly why the deploy half of a window is currently done by hand.
 
 ## Dependencies install themselves; nothing touches the host
 
