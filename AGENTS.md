@@ -657,6 +657,12 @@ family as the stale-green trap above: check *what the gate executed*, not that i
 
 ## Conventions
 
+- **Everything that lives in the repo is in English**: code, comments, commit messages, and the
+  titles and bodies of issues, pull requests and documentation. What stays in Spanish is what does
+  *not* live here — hub messages between agents, and anything written to the owner. Confirmed by him
+  on 2026-08-17; there was no written rule before, so each agent picked, and it came out uneven.
+  **It is not retroactive and nothing old gets translated** — his decision: rewriting old issues
+  fixes no defect and breaks the links of conversations already written.
 - Commits with a scope prefix (`feat(server):`, `fix(auth):`, `docs:`), in English.
 - Project knowledge lives in these docs (`README.md`, `AGENTS.md`, `CLAUDE.md`), not in any
   separate memory store.
