@@ -250,6 +250,45 @@ written for repos where merging is free, and this is not one. Here:
 - Verify afterwards and report the digest that ended up running, not the tag that was asked
   for.
 
+### A group is merged by STACKING it, because a fast-forward can only promote a tree somebody built
+
+This is the mechanical half of "merge in groups", and without it the window burns for nothing.
+
+`publish` **does not build. It promotes.** It resolves `IMAGE:tree-$(git rev-parse HEAD^{tree})`
+and **fails on purpose** when that tag does not exist, so shared infrastructure never receives an
+artifact the gate did not validate. The image is built exactly once, in the **pull-request** job,
+and it is keyed by the git **tree** — the content — not by the commit.
+
+The consequence is easy to miss because the obvious move looks right: cherry-pick the group onto
+`main` in an integration branch, run the tests, fast-forward. Green locally, and it promotes
+**nothing** — that content has never been a PR head, so no image carries its tree. Measured
+2026-08-17 while preparing a window for three PRs:
+
+```
+integration head tree  df174b44…      docker buildx imagetools inspect …:tree-df174b44
+PR #38 head tree       84bb7a76…        ->  image DOES NOT EXIST
+PR #39 head tree       83315741…
+PR #42 head tree       ea860317…
+```
+
+So a group is landed as a **stack**: rebase each branch onto the previous one's head, push each
+branch to its own PR, let each PR build its own tree, and fast-forward `main` **once** to the top.
+The top of the stack is then the content that lands, and its tree has an image.
+
+Two things this buys, beyond working at all:
+
+- **Order the stack by what you would keep.** Put the change that must ship at the **bottom**,
+  untouched. If the window is cut short or authorised for only part of the group, `main` can be
+  fast-forwarded to that lower head with no further CI, because its tree was already built.
+- **Cross-check the stack against an integration you actually tested.** Build the integration
+  branch anyway and compare `HEAD^{tree}` with the top of the stack. Identical trees prove the two
+  are the same content, so the test run on one is a statement about the other.
+
+And the procedure was never written down, yet it was already **on `main` in plain sight**: three
+consecutive commits there are the *unchanged heads* of three PR branches, which is the fingerprint
+of a stack and cannot happen with an integration merge. When the docs are silent, the commit graph
+is a record of what actually worked.
+
 ### A GitHub Actions cron does not fire on the minute it declares
 
 The infra repo's bump declares `cron: "23 * * * *"`. On 2026-08-14 it actually fired at:
@@ -272,9 +311,32 @@ being **late**. Late costs you a slow window. **Early costs the fleet an unannou
 and is the same drift seen from the other side.
 
 So the announced minute is not enough on its own: **a window is only a window if nothing else
-can reach the cluster during it.** Disable the bump's schedule for the duration and re-enable
-it immediately afterwards — and *verify* the re-enable, because a deploy path silently switched
-off is the failure that once left production three days behind while every run reported success.
+can reach the cluster during it.**
+
+**Close that door with a hold that EXPIRES BY ITSELF, not by switching the deploy path off.**
+This corrected an instruction that used to live here — "disable the bump's schedule and re-enable
+it afterwards" — which the infra repo had already stopped doing, for three reasons worth carrying:
+
+- **A workflow that is off is invisible.** Nothing reports it. A deploy path silently switched
+  off is the failure that once left production three days behind while every run reported success,
+  and the re-enable is a step a tired agent skips at the end of a window that already went long.
+- **Disabling also blocks the hand dispatch**, which is the path the window itself needs — so it
+  forces a re-enable at the most delicate minute of the whole operation.
+- **A hold that cannot expire is just a new way to lose deployment.** The one that exists heals
+  itself: past its timestamp it is ignored *loudly*, with a warning naming the command to clear it,
+  rather than quietly continuing to block.
+
+So: set the hold to a timestamp a little past the window, do the work, clear it, and **verify it is
+cleared**. Check first that no hold was left behind by someone else — an inherited hold is
+indistinguishable from a healthy pipeline until you notice nothing has deployed for a day.
+
+**And measure whether the scheduled deploy can reach the cluster at all before planning around it.**
+Read the *jobs*, not the run conclusion: a red run whose jobs show `steps=0` on a hosted runner
+never started, so it deployed nothing and will deploy nothing — that is an infrastructure outage,
+not a code failure, and it decides whether the window needs a hold or a hand deploy. A red run with
+`steps>0` is your code and means the opposite. Measured 2026-08-17: the last three scheduled bumps
+were `failure` with `steps=0` on `ubuntu-latest`, i.e. the pipeline could not have deployed anything
+even unheld — which is exactly why the deploy half of a window is currently done by hand.
 
 ## Dependencies install themselves; nothing touches the host
 
@@ -595,6 +657,12 @@ family as the stale-green trap above: check *what the gate executed*, not that i
 
 ## Conventions
 
+- **Everything that lives in the repo is in English**: code, comments, commit messages, and the
+  titles and bodies of issues, pull requests and documentation. What stays in Spanish is what does
+  *not* live here — hub messages between agents, and anything written to the owner. Confirmed by him
+  on 2026-08-17; there was no written rule before, so each agent picked, and it came out uneven.
+  **It is not retroactive and nothing old gets translated** — his decision: rewriting old issues
+  fixes no defect and breaks the links of conversations already written.
 - Commits with a scope prefix (`feat(server):`, `fix(auth):`, `docs:`), in English.
 - Project knowledge lives in these docs (`README.md`, `AGENTS.md`, `CLAUDE.md`), not in any
   separate memory store.
