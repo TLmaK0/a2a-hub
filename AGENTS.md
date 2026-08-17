@@ -250,6 +250,45 @@ written for repos where merging is free, and this is not one. Here:
 - Verify afterwards and report the digest that ended up running, not the tag that was asked
   for.
 
+### A group is merged by STACKING it, because a fast-forward can only promote a tree somebody built
+
+This is the mechanical half of "merge in groups", and without it the window burns for nothing.
+
+`publish` **does not build. It promotes.** It resolves `IMAGE:tree-$(git rev-parse HEAD^{tree})`
+and **fails on purpose** when that tag does not exist, so shared infrastructure never receives an
+artifact the gate did not validate. The image is built exactly once, in the **pull-request** job,
+and it is keyed by the git **tree** — the content — not by the commit.
+
+The consequence is easy to miss because the obvious move looks right: cherry-pick the group onto
+`main` in an integration branch, run the tests, fast-forward. Green locally, and it promotes
+**nothing** — that content has never been a PR head, so no image carries its tree. Measured
+2026-08-17 while preparing a window for three PRs:
+
+```
+integration head tree  df174b44…      docker buildx imagetools inspect …:tree-df174b44
+PR #38 head tree       84bb7a76…        ->  image DOES NOT EXIST
+PR #39 head tree       83315741…
+PR #42 head tree       ea860317…
+```
+
+So a group is landed as a **stack**: rebase each branch onto the previous one's head, push each
+branch to its own PR, let each PR build its own tree, and fast-forward `main` **once** to the top.
+The top of the stack is then the content that lands, and its tree has an image.
+
+Two things this buys, beyond working at all:
+
+- **Order the stack by what you would keep.** Put the change that must ship at the **bottom**,
+  untouched. If the window is cut short or authorised for only part of the group, `main` can be
+  fast-forwarded to that lower head with no further CI, because its tree was already built.
+- **Cross-check the stack against an integration you actually tested.** Build the integration
+  branch anyway and compare `HEAD^{tree}` with the top of the stack. Identical trees prove the two
+  are the same content, so the test run on one is a statement about the other.
+
+And the procedure was never written down, yet it was already **on `main` in plain sight**: three
+consecutive commits there are the *unchanged heads* of three PR branches, which is the fingerprint
+of a stack and cannot happen with an integration merge. When the docs are silent, the commit graph
+is a record of what actually worked.
+
 ### A GitHub Actions cron does not fire on the minute it declares
 
 The infra repo's bump declares `cron: "23 * * * *"`. On 2026-08-14 it actually fired at:
