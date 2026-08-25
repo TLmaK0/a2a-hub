@@ -17,6 +17,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from a2a_hub.extensions import echoing
 from a2a_hub.registry import (
     AgentRegistry,
     NotRegisteredError,
@@ -145,9 +146,15 @@ def build_registry_routes(agents: AgentRegistry) -> list[Route]:
             )
         return JSONResponse({"identity": identity, "retired": True})
 
+    # The extension was declared in the Agent Card but never negotiated (#48 item 3):
+    # these routes answered whether or not the caller said it speaks it. `echoing`
+    # reports back which extensions the request activated, which is what turns a
+    # declaration into something a client can confirm. It never *requires* the header —
+    # the extension is `required=false` and every live client sends nothing.
+    supported = (REGISTRY_EXTENSION_URI,)
     return [
-        Route(REGISTER_PATH, register, methods=["POST"]),
-        Route(RETIRE_PATH, retire, methods=["POST"]),
-        Route(STATUS_PATH, update_status, methods=["POST"]),
-        Route(REGISTRY_PATH, list_agents, methods=["GET"]),
+        Route(REGISTER_PATH, echoing(register, supported), methods=["POST"]),
+        Route(RETIRE_PATH, echoing(retire, supported), methods=["POST"]),
+        Route(STATUS_PATH, echoing(update_status, supported), methods=["POST"]),
+        Route(REGISTRY_PATH, echoing(list_agents, supported), methods=["GET"]),
     ]

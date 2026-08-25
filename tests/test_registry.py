@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import pytest
 
+from a2a_hub.extensions import A2A_EXTENSIONS_HEADER
+from a2a_hub.routes_registry import REGISTRY_EXTENSION_URI
 from conftest import (
     AGENT_A,
     SESSION,
@@ -206,6 +208,76 @@ async def test_the_card_announces_the_extension(client):
     # which is what matters: a client that ignores the extension keeps working.
     assert extension.get("required", False) is False
     assert "register" in extension["description"]
+
+
+# --- #48 item 3: the extension is negotiated, not only declared -------------
+
+async def test_activating_the_extension_is_echoed_back(client):
+    """The half that was missing: a client can confirm what it actually got.
+
+    Declaring an extension in the card tells a client the capability exists. Echoing
+    the header tells it the extension is active *on this call*, which is the only way
+    it learns rather than assumes.
+    """
+    response = await client.post(
+        REGISTER,
+        json=declaration(),
+        headers={**auth(TOKEN_A), A2A_EXTENSIONS_HEADER: REGISTRY_EXTENSION_URI},
+    )
+
+    assert response.status_code == 200
+    assert response.headers[A2A_EXTENSIONS_HEADER] == REGISTRY_EXTENSION_URI
+
+
+async def test_an_unknown_extension_is_ignored_and_not_echoed(client):
+    """Echoing what was asked for would make the echo worthless.
+
+    A server that reflected the request would let a client believe an extension it
+    invented is active — a confident answer to a question nobody can check, which is
+    the failure shape this repo keeps closing. Ours is answered from what the server
+    implements, and an unsupported URI is not an error either: it is ignored, so a
+    client naming several extensions still gets the ones that exist.
+    """
+    response = await client.get(
+        LIST,
+        headers={
+            **auth(TOKEN_A),
+            A2A_EXTENSIONS_HEADER: (
+                f"https://example.invalid/ext/made-up/v9, {REGISTRY_EXTENSION_URI}"
+            ),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers[A2A_EXTENSIONS_HEADER] == REGISTRY_EXTENSION_URI
+    assert "made-up" not in response.headers[A2A_EXTENSIONS_HEADER]
+
+
+async def test_a_client_that_never_heard_of_the_extension_is_unaffected(client):
+    """`required=false` has to mean it. Eleven live clients send no such header.
+
+    An optional extension that starts refusing, or even answering differently, to
+    callers who ignore it was never optional. So: no header in, no header out, and the
+    route does exactly what it did before.
+    """
+    response = await client.post(REGISTER, json=declaration(), headers=auth(TOKEN_A))
+
+    assert response.status_code == 200
+    assert A2A_EXTENSIONS_HEADER not in response.headers
+    assert response.json()["identity"] == IDENT_A
+
+    listed = await client.get(LIST, headers=auth(TOKEN_A))
+    assert find(listed.json()["agents"], IDENT_A)["role"] == "manager"
+
+
+async def test_the_header_is_matched_case_insensitively(client):
+    """HTTP header names are case-insensitive, so a client may spell it as it likes."""
+    response = await client.get(
+        LIST,
+        headers={**auth(TOKEN_A), "a2a-extensions": REGISTRY_EXTENSION_URI},
+    )
+
+    assert response.headers["a2a-extensions"] == REGISTRY_EXTENSION_URI
 
 
 async def test_the_register_never_breaks_the_mailbox(client, monkeypatch):
