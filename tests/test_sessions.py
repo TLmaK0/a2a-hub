@@ -167,7 +167,9 @@ async def test_invalid_session_header_rejected(client, bad):
     body = {"jsonrpc": "2.0", "id": 1, "method": "ListTasks", "params": {}}
     response = await client.post("/", json=body, headers=session_headers(TOKEN_A, bad))
     assert response.status_code == 400
-    assert response.json()["error"] == "invalid_session"
+    # JSON-RPC-shaped, because this is the JSON-RPC endpoint (#48 item 5). The header
+    # is still mandatory — what changed is what a conformant client can read.
+    assert response.json()["error"]["data"]["error"] == "invalid_session"
 
 
 async def test_session_header_is_mandatory(client):
@@ -175,8 +177,10 @@ async def test_session_header_is_mandatory(client):
     body = {"jsonrpc": "2.0", "id": 1, "method": "ListTasks", "params": {}}
     response = await client.post("/", json=body, headers=auth(TOKEN_A, session=None))
     assert response.status_code == 400
-    assert response.json()["error"] == "invalid_session"
-    assert "required" in response.json()["detail"]
+    error = response.json()["error"]
+    assert error["code"] == -32600
+    assert error["data"]["error"] == "invalid_session"
+    assert "required" in error["data"]["detail"]
 
 
 async def test_missing_session_still_401_without_token(client):

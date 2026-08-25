@@ -46,6 +46,55 @@ IDENTITY_SEPARATOR = "/"
 #: Accepted session names: keeps identities readable and safe as storage keys.
 SESSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
+#: JSON-RPC 2.0 "Invalid Request". Both refusals that use it below happen *before*
+#: the body is parsed, which is what this code is for — not a bad method or bad
+#: params, but a request that could not be accepted as a request.
+JSONRPC_INVALID_REQUEST = -32600
+
+
+def refusal(
+    scope: Scope,
+    rpc_path: str,
+    status_code: int,
+    error: str,
+    detail: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
+    """A refusal shaped for the surface the caller actually hit.
+
+    Item 5 of #48: two of this server's refusals returned a plain ``{"error": ...}``
+    body **on the JSON-RPC endpoint**, where a conformant client parses the body as a
+    JSON-RPC response and therefore gets nothing it can read. The check was never the
+    problem — the body cap is an application-level DoS guard that works with no proxy
+    in front, and the session header is what keeps two processes off one mailbox — so
+    what changes here is the shape, and only where the shape is wrong.
+
+    Off the JSON-RPC endpoint the plain body **stays**, for the same reason it is
+    being changed on it: ``/healthz`` and the register's REST routes are not JSON-RPC,
+    and wrapping their errors in an envelope would be the identical mistake mirrored.
+
+    ``id`` is ``null`` because both refusals fire before the body is read — the body
+    is what would carry the id, and not reading it is the point of a size guard. That
+    is what JSON-RPC 2.0 prescribes when the id cannot be determined.
+
+    The original keys are kept inside ``data``, so nothing a caller could read before
+    stops being readable; it moves.
+    """
+    if scope.get("path") == rpc_path:
+        body: dict = {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {
+                "code": JSONRPC_INVALID_REQUEST,
+                "message": "Invalid Request",
+                "data": {"error": error, "detail": detail},
+            },
+        }
+    else:
+        body = {"error": error, "detail": detail}
+    return JSONResponse(body, status_code=status_code, headers=headers)
+
 
 def principal_of(identity: str) -> str:
     """Return the token-backed principal of an identity (``machine/session``)."""
@@ -137,9 +186,13 @@ class BearerAuthMiddleware:
         app: ASGIApp,
         registry: TokenRegistry,
         seen: "SeenRecorder | None" = None,
+        rpc_path: str = "/",
     ) -> None:
         self.app = app
         self.registry = registry
+        # Needed only to shape a refusal: this middleware runs on every path, and
+        # only the JSON-RPC one wants a JSON-RPC body. See `refusal`.
+        self.rpc_path = rpc_path
         # Stamping last-seen here, rather than in the register routes, is what makes
         # the field trustworthy: it covers every authenticated request, so presence
         # is observed by the server instead of asserted by the client.
@@ -171,15 +224,13 @@ class BearerAuthMiddleware:
         # token from sharing one mailbox.
         session = (conn.headers.get(SESSION_HEADER) or "").strip()
         if not SESSION_PATTERN.match(session):
-            response = JSONResponse(
-                {
-                    "error": "invalid_session",
-                    "detail": (
-                        f"the {SESSION_HEADER} header is required and must match "
-                        f"{SESSION_PATTERN.pattern}"
-                    ),
-                },
-                status_code=400,
+            response = refusal(
+                scope,
+                self.rpc_path,
+                400,
+                "invalid_session",
+                f"the {SESSION_HEADER} header is required and must match "
+                f"{SESSION_PATTERN.pattern}",
             )
             await response(scope, receive, send)
             return
@@ -228,9 +279,10 @@ class MaxBodySizeMiddleware:
     not just those behind a proxy. ``max_bytes <= 0`` disables the check.
     """
 
-    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+    def __init__(self, app: ASGIApp, max_bytes: int, rpc_path: str = "/") -> None:
         self.app = app
         self.max_bytes = max_bytes
+        self.rpc_path = rpc_path
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http" and self.max_bytes > 0:
@@ -241,12 +293,12 @@ class MaxBodySizeMiddleware:
                     except ValueError:
                         too_large = False
                     if too_large:
-                        response = JSONResponse(
-                            {
-                                "error": "payload_too_large",
-                                "detail": f"request body exceeds {self.max_bytes} bytes",
-                            },
-                            status_code=413,
+                        response = refusal(
+                            scope,
+                            self.rpc_path,
+                            413,
+                            "payload_too_large",
+                            f"request body exceeds {self.max_bytes} bytes",
                         )
                         await response(scope, receive, send)
                         return
