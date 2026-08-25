@@ -337,6 +337,69 @@ def _appears_in_register(hub: HubClient, identity: str) -> bool:
     return any(entry.get("identity") == identity for entry in listed)
 
 
+def split_by_mailbox(
+    tasks: list[dict[str, Any]], identity: str, principal: str
+) -> dict[str, int]:
+    """Count how many tasks came to *this session* versus to the agent-wide mailbox.
+
+    Takes ``principal`` as an argument instead of recovering it by splitting
+    ``identity`` on ``/``. Not because a session name could contain a slash — the
+    hub's ``SESSION_PATTERN`` forbids it — but because the principal is already known
+    exactly: it is what the token authenticated as. Deriving it by string surgery
+    would replace a fact with a guess, and a wrong principal here would silently
+    reclassify every broadcast, in the one function whose job is to be trusted about
+    which mailbox you are reading.
+
+    A task with no recipient metadata is counted as ``unclassified`` rather than
+    guessed into a bucket: the sender's own rejections arrive that way, and a number
+    that is honest about not knowing is worth more here than a tidy total.
+    """
+    counts = {"session": 0, "broadcast": 0, "unclassified": 0}
+    for task in tasks:
+        recipient = None
+        for artifact in task.get("artifacts") or []:
+            recipient = (artifact.get("metadata") or {}).get("recipient")
+            if recipient:
+                break
+        if recipient == identity:
+            counts["session"] += 1
+        elif recipient == principal:
+            counts["broadcast"] += 1
+        else:
+            counts["unclassified"] += 1
+    return counts
+
+
+def _declared_in_register(hub: HubClient, identity: str) -> bool:
+    """Has this identity ever *declared* itself — not merely been seen?
+
+    The obvious check, "does a register row exist", cannot work here and finding out
+    why is the useful part: ``AgentRegistry.touch`` stamps ``last_seen`` on **every**
+    authenticated request, so the ``ListTasks`` call we just made has already created
+    the row for whatever session name was typed. Asking whether the row exists is
+    asking whether we ourselves just ran, and the answer is always yes.
+
+    ``declared`` is the field that survives that, because only ``introduce`` sets it.
+    A session that has been seen but never declared is the exact shape of a typo — and
+    also of an agent that skipped its mandatory introduction, which is worth saying
+    too.
+
+    Tolerant of its own failure, deliberately: an unreadable register returns ``True``
+    so a warning is withheld rather than invented. A check that cries wolf gets
+    ignored, and then it protects nothing.
+    """
+    try:
+        listed = hub.agents().get("agents", [])
+    except ClientError:
+        return True
+    for entry in listed:
+        if entry.get("identity") == identity:
+            return bool(entry.get("declared"))
+    # No row at all: the touch should have made one, so something is different from
+    # what we understand. Say nothing rather than accuse.
+    return True
+
+
 def format_task(task: dict[str, Any]) -> str:
     """One-line summary of a task plus the messages it carries."""
     status = task.get("status", {})
@@ -637,12 +700,42 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
 
         elif command == "inbox":
             result = hub.list_all_tasks()
+            # Which mailbox each message came to, because a session name nobody ever
+            # registered is a valid identity: it reads owners {principal/session,
+            # principal}, finds nothing of its own, and is handed the principal's
+            # broadcasts. A typo therefore produces a plausible, recent, wholly
+            # unrelated mailbox — and never shows the messages addressed to the agent
+            # it meant to be. An empty mailbox makes you suspicious; one full of
+            # broadcast does not.
+            split = split_by_mailbox(
+                result.get("tasks", []), hub.config.identity, hub.config.agent
+            )
+            returned, total = len(result.get("tasks", [])), result.get("totalSize", 0)
+            # A short read makes "nothing is addressed to me" mean nothing: the
+            # messages that would disprove it are the ones we did not fetch. So the
+            # register is only consulted when the whole mailbox was actually read —
+            # otherwise this would answer a question the data cannot support, which
+            # is the failure mode every trap in AGENTS.md has in common.
+            #
+            # And only when nothing is addressed here: that is the shape a typo
+            # makes, the healthy case must not pay a second request for it, and a
+            # session with messages of its own is real whether it declared itself
+            # or not.
+            complete = not result.get("incomplete") and returned == total
+            undeclared = (
+                complete
+                and split["session"] == 0
+                and not _declared_in_register(hub, hub.config.identity)
+            )
             if "--json" in args:
+                # Additive keys: a poll loop reads `tasks` and cannot break on these,
+                # and the loops are precisely who inherits a mistyped session from a
+                # prompt and never sees a warning printed for a human.
+                result = dict(
+                    result, mailboxSplit=split, sessionDeclared=not undeclared
+                )
                 print(json.dumps(result, indent=2))
             else:
-                returned, total = len(result.get("tasks", [])), result.get(
-                    "totalSize", 0
-                )
                 # Both numbers, always. Printing only the total is what let a
                 # truncated read pass for a whole one for weeks.
                 print(
@@ -650,6 +743,24 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
                     f"{returned} of {total} task(s), "
                     f"{result.get('pagesRead', 1)} page(s)"
                 )
+                unclassified = (
+                    f", {split['unclassified']} with no recipient"
+                    if split["unclassified"]
+                    else ""
+                )
+                print(
+                    f"  {split['session']} addressed to this session, "
+                    f"{split['broadcast']} to the agent-wide mailbox "
+                    f"(broadcast){unclassified}"
+                )
+                if undeclared:
+                    print(
+                        f"WARNING: {hub.config.session!r} has never introduced itself "
+                        "and has no messages of its own. If you mistyped --session or "
+                        "A2A_HUB_SESSION, everything above is somebody else's "
+                        "broadcast and your own messages are in the mailbox you meant "
+                        "to name."
+                    )
                 if result.get("incomplete") or returned != total:
                     print(
                         f"WARNING: read {returned} of {total} — this is NOT your whole "

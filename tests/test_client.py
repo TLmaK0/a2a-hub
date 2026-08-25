@@ -20,6 +20,7 @@ from a2a_hub.client import (
     format_agent,
     format_task,
     main,
+    split_by_mailbox,
 )
 from a2a_hub.client import _quiet_for_arg
 
@@ -1173,3 +1174,167 @@ async def test_the_sender_can_read_back_the_id_that_send_printed(make_client, ca
     assert listed_id == task_id
     assert await run(main, ["read", listed_id], client=recipient) == 0
     assert json.loads(capsys.readouterr().out)["id"] == task_id
+
+
+# --- #46: which mailbox am I actually reading? -----------------------------
+
+async def test_inbox_says_how_many_came_to_the_session_and_how_many_are_broadcast(
+    make_client, capsys
+):
+    """The split, over the real protocol, with both kinds of delivery present.
+
+    The bare principal is deliberately readable by every session of that agent, so
+    `principal` and `principal/session` arrive in the same listing and nothing in a
+    message says which it was. Counting them separately is the whole fix.
+    """
+    sender = make_client(AGENT_A, TOKEN_A)
+    recipient = make_client(AGENT_B, TOKEN_B)
+
+    await run(sender.send_message, IDENT_B, "for this session only")
+    await run(sender.send_message, AGENT_B, "to every session of agent-b")
+
+    assert await run(main, ["inbox"], client=recipient) == 0
+    out = capsys.readouterr().out
+    assert f"mailbox of {IDENT_B}: 2 of 2 task(s)" in out
+    assert "1 addressed to this session, 1 to the agent-wide mailbox (broadcast)" in out
+    # Both messages are still listed: this adds a line, it does not filter.
+    assert "for this session only" in out
+    assert "to every session of agent-b" in out
+
+
+async def test_a_mistyped_session_is_told_it_is_reading_somebody_elses_broadcast(
+    make_client, capsys
+):
+    """The defect itself: an invented session name is a valid identity.
+
+    Measured against the live hub on 2026-08-25 before writing this: `--session
+    no-existe-jamas-9x7` returned `393 of 393 task(s)` and exit 0. Every one of them
+    was a broadcast, and none of the real session's messages were among them.
+    """
+    sender = make_client(AGENT_A, TOKEN_A)
+    real = make_client(AGENT_B, TOKEN_B, session="s1")
+    await run(sender.send_message, IDENT_B, "the message the typo will never show")
+    await run(sender.send_message, AGENT_B, "a broadcast that makes it look healthy")
+
+    # A well-formed name that nobody ever registered. It has to be well-formed to
+    # reproduce the defect at all: the hub already rejects a session that does not
+    # match SESSION_PATTERN with 400 invalid_session, so a malformed typo fails
+    # loudly and was never the dangerous case. The dangerous one is a name that
+    # looks exactly like a real session and simply is not this agent's.
+    typo = make_client(AGENT_B, TOKEN_B, session="s2")
+    assert await run(main, ["inbox"], client=typo) == 0
+    out = capsys.readouterr().out
+
+    # Still not an error and still not empty — that is what made it deceptive.
+    assert "1 of 1 task(s)" in out
+    assert "0 addressed to this session, 1 to the agent-wide mailbox" in out
+    assert "WARNING: 's2' has never introduced itself" in out
+    assert "somebody else's broadcast" in out
+    # And the proof that the warning is about something real: the message addressed
+    # to the session it meant to name is absent here and present there.
+    assert "the message the typo will never show" not in out
+    assert await run(main, ["inbox"], client=real) == 0
+    assert "the message the typo will never show" in capsys.readouterr().out
+
+
+async def test_a_registered_session_with_only_broadcast_is_not_warned_about(
+    make_client, capsys
+):
+    """The false-alarm guard, and it is the reason the check is a warning.
+
+    A brand-new agent legitimately has nothing addressed to it yet. If that produced
+    the warning, the fleet would learn to ignore the line and it would protect
+    nothing — the same way the shared-session warning had to be reworded once it
+    started firing on correct usage.
+    """
+    sender = make_client(AGENT_A, TOKEN_A)
+    recipient = make_client(AGENT_B, TOKEN_B)
+    await run(sender.send_message, AGENT_B, "broadcast only")
+
+    assert await run(main, ["introduce", "project", "p", "working"], client=recipient) == 0
+    capsys.readouterr()
+
+    assert await run(main, ["inbox"], client=recipient) == 0
+    out = capsys.readouterr().out
+    assert "0 addressed to this session, 1 to the agent-wide mailbox" in out
+    assert "has never introduced itself" not in out
+
+
+async def test_inbox_json_carries_the_split_for_a_poll_loop(make_client):
+    """The loops read `--json`, and a loop is what inherits a typo from a prompt."""
+    sender = make_client(AGENT_A, TOKEN_A)
+    recipient = make_client(AGENT_B, TOKEN_B)
+    await run(sender.send_message, IDENT_B, "mine")
+    await run(sender.send_message, AGENT_B, "everyone's")
+
+    typo = make_client(AGENT_B, TOKEN_B, session="nope")
+    for client, expected in ((recipient, 1), (typo, 0)):
+        payload = await run(client.list_all_tasks)
+        split = split_by_mailbox(
+            payload["tasks"], client.config.identity, client.config.agent
+        )
+        assert split["session"] == expected
+        assert split["broadcast"] == 1
+        assert split["unclassified"] == 0
+
+
+def test_split_counts_a_task_with_no_recipient_as_unclassified():
+    """A sender's own rejection has no recipient metadata; it is not guessed."""
+    counts = split_by_mailbox(
+        [
+            {"artifacts": [{"metadata": {"recipient": "p/s"}}]},
+            {"artifacts": [{"metadata": {"recipient": "p"}}]},
+            {"artifacts": [{"metadata": {}}]},
+            {"artifacts": []},
+            {},
+        ],
+        "p/s",
+        "p",
+    )
+    assert counts == {"session": 1, "broadcast": 1, "unclassified": 3}
+
+
+def test_split_takes_the_principal_as_a_fact_and_never_derives_it():
+    """The principal is what the token authenticated as, not a substring of anything.
+
+    A session name cannot contain a slash (``SESSION_PATTERN``), so today deriving it
+    would happen to work. This pins the contract anyway, because the failure it
+    prevents is silent and total: a wrong principal reclassifies *every* broadcast,
+    in the one function whose whole job is to say which mailbox you are reading.
+    Passing it in means there is no arithmetic left to get wrong.
+    """
+    counts = split_by_mailbox(
+        [
+            {"artifacts": [{"metadata": {"recipient": "p/a/b"}}]},
+            {"artifacts": [{"metadata": {"recipient": "p"}}]},
+        ],
+        "p/a/b",
+        "p",
+    )
+    assert counts == {"session": 1, "broadcast": 1, "unclassified": 0}
+
+
+def test_a_short_read_never_claims_the_session_has_nothing_of_its_own(make_client):
+    """Found by an existing test, and it was a real flaw in the first version.
+
+    When the mailbox could not be read whole, "0 addressed to this session" is not a
+    measurement — the messages that would disprove it are exactly the ones that were
+    not fetched. The first version consulted the register anyway and would have told
+    a truncated read that its session was never registered.
+
+    So the warning is gated on a complete read, and the register is not even queried:
+    a second request on top of a mailbox that is already failing to page is the wrong
+    move twice over. The short-read warning still fires, which is the one that is true.
+    """
+    client = make_client(AGENT_B, TOKEN_B, session="never-registered")
+    client.list_all_tasks = lambda *a, **k: {
+        "tasks": [],
+        "totalSize": 258,
+        "pagesRead": 100,
+        "incomplete": True,
+    }
+    # If the register were consulted here this would deadlock: `main` runs on the
+    # event-loop thread and the transport hands the request back to that same loop.
+    # The deadlock is how the flaw announced itself, so leaving this call direct
+    # keeps the guard honest instead of hiding it behind a worker thread.
+    assert main(["inbox"], client=client) == 0
