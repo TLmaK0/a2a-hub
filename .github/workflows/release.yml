@@ -1,0 +1,64 @@
+name: Release the client
+
+# Issue #35. The client is not deployed, it is RELEASED: a tag builds the artifacts, proves
+# they run, and publishes them. A host then installs a version.
+#
+# This fires on a TAG, and `ci.yml` fires on `branches: [main]` — a tag push matches neither
+# of its triggers. So cutting a release builds no image, promotes nothing and does not
+# restart the hub. That is the point of the issue and not a happy accident: the client had
+# nothing to do with the server's deploy, and the coupling was the defect.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: build, prove and publish
+    runs-on: ubuntu-latest
+    permissions:
+      # Creating the release and uploading the artifacts to it.
+      contents: write
+    steps:
+      # `fetch-depth: 0` because the gate below is the whole suite and some tests read the
+      # repo; a shallow clone has bitten this repo before on anything git-aware.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # The same gate as a merge, because a release is at least as reachable as main: a
+      # published version is what every host installs, and a bad one is harder to take back
+      # than a bad image. Order matters — `uv lock --check` runs before any command that
+      # would rewrite the lock, or the step in front repairs the artifact this checks.
+      - name: Check uv.lock is current with pyproject.toml
+        run: uv lock --check
+
+      - name: Sync dependencies (runtime + dev)
+        run: uv sync --frozen
+
+      - name: Tests + coverage (pytest)
+        run: uv run --frozen pytest
+
+      # All of the release logic is in the script, so it runs the same way on a laptop as it
+      # does here. Logic that only exists inside `run:` is only ever exercised by the
+      # workflow, and this repo has already shipped a green gate wrapped around code that
+      # could not run.
+      - name: Build the artifacts and prove they run
+        run: .github/scripts/build_client_release.sh "${GITHUB_REF_NAME}"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            dist/*.whl dist/*.tar.gz

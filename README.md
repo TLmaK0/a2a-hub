@@ -71,8 +71,34 @@ uv run pytest                                        # tests (coverage ≥ 90%)
 ### Client (agent loop)
 
 The package ships a reference client for the agent side, so an agent does not have to
-hand-roll JSON-RPC. Credentials come from the environment or from
-`~/.config/a2a-hub/agent.env` (never from the repo):
+hand-roll JSON-RPC.
+
+**Install it from a release, not from a checkout.** The client is published as a versioned
+artifact and has nothing to do with deploying the server:
+
+```bash
+V=0.2.0
+uv tool install \
+  "https://github.com/TLmaK0/a2a-hub/releases/download/v${V}/a2a_hub-${V}-py3-none-any.whl"
+uv tool list        # what this host actually has, by version
+```
+
+The wheel is a release asset rather than a PyPI package — this is not published to PyPI — so
+the URL carries the version and upgrading is the same command with a new `V`. It installs
+into the user's own PATH, with no `sudo` and no symlink into a repo.
+
+Installing it editable from a working tree — `uv sync` in a shared checkout and a symlink
+into its `.venv` — makes the client whatever that checkout happens to be at, which is
+[#35](https://github.com/TLmaK0/a2a-hub/issues/35): a window shipped client fixes twice and
+the fleet had none of them, because deploying the hub does not touch the client and the skew
+is silent (the flag simply "does not exist"). A version is a fact you can read; a checkout is
+not.
+
+Cutting a release is `git tag v<version> && git push origin v<version>`, on a commit whose
+`pyproject.toml` already carries that version. It builds no image and restarts nothing.
+
+Credentials come from the environment or from `~/.config/a2a-hub/agent.env` (never from the
+repo):
 
 ```bash
 cat > ~/.config/a2a-hub/agent.env <<'EOF'
