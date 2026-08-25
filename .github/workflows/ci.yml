@@ -30,13 +30,40 @@ jobs:
         with:
           enable-cache: true
 
+      # `uv.lock` is a generated file that lives in the repo, so it is a cache: if
+      # nothing checks it against `pyproject.toml`, it gets used stale and in silence.
+      # `--frozen` below is NOT that check — it means "do not update the lock", not
+      # "the lock matches its source". Measured on a tree with a dependency added to
+      # `pyproject.toml` and the lock deliberately left alone:
+      #
+      #   uv lock --check     -> exit 1   "The lockfile at `uv.lock` needs to be updated"
+      #   uv sync --frozen    -> exit 0   and the lock stays stale
+      #
+      # The dangerous case is not a new import (the code would fail to import and
+      # pytest would catch it by luck) but a changed version constraint: bump a
+      # dependency, forget the lock, and the gate is green while the image ships the
+      # old version. `pyproject.toml` then documents a dependency set that nothing is
+      # built from, and nothing says so.
+      #
+      # This runs BEFORE the sync, and it has to: `uv run` re-resolves and rewrites
+      # the lock unless told not to, so any check placed after the test step passes
+      # because the test step already repaired the file. Measured while writing this —
+      # a first probe reported "all fine" for exactly that reason.
+      - name: Check uv.lock is current with pyproject.toml
+        run: uv lock --check
+
       - name: Sync dependencies (runtime + dev)
         run: uv sync --frozen
 
       # The minimum coverage (>=90%) is enforced in pyproject.toml
       # (--cov-fail-under=90): this job gates the image publish.
+      #
+      # `--frozen` so this step cannot quietly re-resolve and rewrite `uv.lock` the way
+      # a bare `uv run` does. The check above already fails the job first, so this is
+      # redundant today — it is here so that reordering the steps cannot restore the
+      # hole, because the step that repairs the artifact is the one that hides it.
       - name: Tests + coverage (pytest)
-        run: uv run pytest
+        run: uv run --frozen pytest
 
       # The image is identified by the git TREE, not the commit. A tree hash is the
       # hash of the content, so it survives a rebase: the commit sha changes, the tree
