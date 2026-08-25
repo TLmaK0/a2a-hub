@@ -60,13 +60,77 @@ async def test_gettask_by_owner_returns_content(client):
     assert task["artifacts"][0]["parts"][0]["text"] == "secret"
 
 
-async def test_gettask_by_non_owner_not_found(client):
-    body = await _send(client, TOKEN_A, IDENT_B)
+async def test_gettask_by_someone_who_neither_owns_nor_sent_it_is_not_found(client):
+    """The real isolation boundary: not the owner *and* not the sender.
+
+    This test used to send A -> B and check that A got `Task not found`, calling A a
+    "non-owner". A is the **sender**, so it was measuring two rules at once and the
+    weaker one hid a defect: a sender holding the id `SendMessage` returned could not
+    re-read their own message. Now B/s1 sends to B/s2, so A is genuinely uninvolved.
+    """
+    body = await _send(client, TOKEN_B, f"{AGENT_B}/s2", "between two sessions of B")
     tid = body["result"]["task"]["id"]
 
-    # Sender A cannot read B's mailbox.
     got = await rpc(client, "GetTask", {"id": tid}, token=TOKEN_A)
     assert got.json()["error"]["message"] == "Task not found"
+
+
+async def test_the_sender_can_reread_the_message_they_sent(client):
+    """The sender held a receipt for something they could not look at.
+
+    Measured against the live hub on 2026-08-25 before the fix: `send` answered
+    `COMPLETED (task 0971de4b)` and `read 0971de4b` answered `hub error: Task not
+    found`, exit 1 — which reads as "it never existed" for a message that had in fact
+    been delivered.
+    """
+    body = await _send(client, TOKEN_A, IDENT_B, "what exactly did I send?")
+    tid = body["result"]["task"]["id"]
+
+    got = await rpc(client, "GetTask", {"id": tid}, token=TOKEN_A)
+    task = got.json()["result"]
+    assert task["id"] == tid
+    assert task["artifacts"][0]["parts"][0]["text"] == "what exactly did I send?"
+    assert task["artifacts"][0]["metadata"]["sender"] == IDENT_A
+
+
+async def test_rereading_a_send_does_not_put_it_in_the_senders_mailbox(client):
+    """The mailbox model is unchanged, and this is the assertion that proves it.
+
+    `GetTask` needs the exact id, which only the sender was handed. `ListTasks` is
+    untouched, so nothing became enumerable: without this, "the sender can read it"
+    could have been delivered by widening the listing, which would have put every
+    message an agent ever sent back into its own inbox and doubled the fleet's polling
+    for nothing.
+    """
+    body = await _send(client, TOKEN_A, IDENT_B, "for B")
+    tid = body["result"]["task"]["id"]
+
+    assert (await rpc(client, "GetTask", {"id": tid}, token=TOKEN_A)).json()["result"]
+    la = await rpc(client, "ListTasks", {}, token=TOKEN_A)
+    assert la.json()["result"]["totalSize"] == 0, "a send leaked into the sender's inbox"
+    lb = await rpc(client, "ListTasks", {}, token=TOKEN_B)
+    assert lb.json()["result"]["totalSize"] == 1
+
+
+async def test_a_task_with_no_sender_stamp_is_handed_to_nobody(client):
+    """A rejected delivery carries no `sender` metadata, so it authorises no one.
+
+    A rejection is already stored under the sender, so they can read it as the owner.
+    What must not happen is the *other* agent reaching it by claiming to be a sender
+    the artifact never names.
+    """
+    r = await rpc(
+        client,
+        "SendMessage",
+        send_message_params(None, "no recipient", with_recipient=False),
+        token=TOKEN_A,
+    )
+    tid = r.json()["result"]["task"]["id"]
+
+    mine = await rpc(client, "GetTask", {"id": tid}, token=TOKEN_A)
+    assert mine.json()["result"]["id"] == tid
+    theirs = await rpc(client, "GetTask", {"id": tid}, token=TOKEN_B)
+    assert theirs.json()["error"]["message"] == "Task not found"
 
 
 async def test_list_with_artifacts(client):

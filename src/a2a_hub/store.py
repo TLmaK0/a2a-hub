@@ -22,6 +22,7 @@ import base64
 import json
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from a2a.server.context import ServerCallContext
@@ -30,7 +31,11 @@ from a2a.types import a2a_pb2
 from a2a.utils.constants import DEFAULT_LIST_TASKS_PAGE_SIZE
 
 from a2a_hub.auth import principal_of
-from a2a_hub.executor import OWNER_OVERRIDE_KEY, hub_owner_resolver
+from a2a_hub.executor import (
+    OWNER_OVERRIDE_KEY,
+    hub_owner_resolver,
+    struct_to_dict,
+)
 
 
 @dataclass(frozen=True)
@@ -74,6 +79,20 @@ def _decode_cursor(token: str) -> _Cursor:
         return _Cursor({}, 0, {})
 
 
+def _sender_of(task: a2a_pb2.Task) -> str | None:
+    """Who sent this task, according to the artifact the executor stamped.
+
+    The delivery metadata is the only record of the sender: the task row itself is
+    keyed by owner, which is the *recipient*. Returns ``None`` for anything with no
+    such stamp — a task with no sender belongs to nobody and is not handed out.
+    """
+    for artifact in task.artifacts:
+        sender = struct_to_dict(artifact.metadata).get("sender")
+        if isinstance(sender, str) and sender:
+            return sender
+    return None
+
+
 def create_engine(db_url: str) -> AsyncEngine:
     """Create the SQLAlchemy ``AsyncEngine`` for the given URL."""
     return create_async_engine(db_url)
@@ -107,12 +126,54 @@ class HubTaskStore(DatabaseTaskStore):
     async def get(
         self, task_id: str, context: ServerCallContext
     ) -> a2a_pb2.Task | None:
-        """Fetch a task from any mailbox this caller may read."""
+        """Fetch a task from any mailbox this caller may read, or one they sent."""
         for owner in self._read_owners(context):
             task = await super().get(task_id, self._context_for(context, owner))
             if task is not None:
                 return task
-        return None
+        return await self._get_as_sender(task_id, context)
+
+    async def _get_as_sender(
+        self, task_id: str, context: ServerCallContext
+    ) -> a2a_pb2.Task | None:
+        """Last resort: the caller may re-read a message they themselves sent.
+
+        A delivered task is owned by the **recipient**, so the id ``SendMessage``
+        hands back is never in a mailbox the sender may read: they held a receipt for
+        something they could not look at. ``GetTask`` on their own send answered
+        ``Task not found``, which reads as "it never existed".
+
+        The gate is deliberately narrow, because widening reads on a shared task store
+        is the kind of change this repo has broken before:
+
+        - **``GetTask`` only.** ``list()`` is untouched, so no mailbox becomes
+          enumerable and no listing grows. You must already hold the exact id.
+        - **The id is a UUID**, so holding it is not guessable — and the only way to
+          have it is to have been given it by the send that created it.
+        - **Authorised on the artifact, not on the query.** The task is loaded first
+          and returned only if it names this caller as its sender, so a wrong guess
+          reveals nothing but the same ``not found``.
+        - **Never during a delivery.** An ``owner_override`` in the state means the
+          framework is reading back the task it is writing; that path must keep
+          resolving to exactly one owner.
+
+        What this does *not* do is tell the sender whether anyone read it. That is
+        what the marks work answers; re-reading and being-attended-to are two
+        questions, and conflating them is how a sender ends up reassured by the wrong
+        signal.
+        """
+        if context.state.get(OWNER_OVERRIDE_KEY):
+            return None
+        await self._ensure_initialized()
+        async with self.async_session_maker() as session:
+            result = await session.execute(
+                select(self.task_model).where(self.task_model.id == task_id)
+            )
+            row = result.scalar_one_or_none()
+        if row is None:
+            return None
+        task = self._from_orm(row)
+        return task if _sender_of(task) == context.user.user_name else None
 
     async def list(
         self, params: a2a_pb2.ListTasksRequest, context: ServerCallContext

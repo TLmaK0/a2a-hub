@@ -60,7 +60,7 @@ def hub_owner_resolver(context: ServerCallContext) -> str:
     return context.user.user_name
 
 
-def _struct_to_dict(struct: object) -> dict:
+def struct_to_dict(struct: object) -> dict:
     """Convert a ``google.protobuf.Struct`` into a plain dict (or ``{}``)."""
     if struct is None:
         return {}
@@ -71,7 +71,7 @@ def _extract_recipient(context: RequestContext) -> str | None:
     """Get the recipient from the message metadata (or the request metadata)."""
     sources: list[dict] = []
     if context.message is not None:
-        sources.append(_struct_to_dict(context.message.metadata))
+        sources.append(struct_to_dict(context.message.metadata))
     sources.append(context.metadata or {})
 
     for meta in sources:

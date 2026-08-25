@@ -444,9 +444,17 @@ def test_client_uses_urllib_transport_by_default():
 
 # --- formatting -----------------------------------------------------------
 
-def test_format_task_without_artifacts():
+def test_format_task_shows_the_whole_id_because_read_matches_exactly():
+    """The id in a listing has to be the id `read` accepts.
+
+    This test previously asserted the 8-character prefix, which is how the listing and
+    the `read` command drifted apart without anything going red: `GetTask` matches the
+    id exactly, so every id the tool printed was one it would refuse. Measured on a
+    task this session owned — full id returned it, printed prefix gave `Task not
+    found`.
+    """
     line = format_task({"id": "abcdef1234", "status": {"state": "TASK_STATE_WORKING"}})
-    assert "[abcdef12]" in line
+    assert "[abcdef1234]" in line
     assert "WORKING" in line
 
 
@@ -1127,3 +1135,41 @@ def test_every_command_that_takes_free_text_is_guarded():
     assert main(["status", "--bogus", "y"], hub) != 0
     for command in ("agents", "inbox", "read", "whoami", "retire"):
         assert main([command, "--bogus"], hub) != 0, command
+
+
+# --- #47: a receipt you can present ---------------------------------------
+
+async def test_the_sender_can_read_back_the_id_that_send_printed(make_client, capsys):
+    """End to end through the CLI, using the id `send` actually printed.
+
+    This is the test whose absence let #47 exist. Both halves of the defect are on
+    this path and each alone is enough to break it:
+
+    - the id was printed truncated to 8 characters, and `GetTask` matches exactly, so
+      the receipt named nothing;
+    - and a delivered task is owned by the recipient, so the sender was not authorised
+      to read it even with the right id.
+
+    Parsing the id out of the output rather than out of the API response is the point:
+    it is what an agent does, and it is the only way a truncation shows up as a
+    failure instead of as a cosmetic choice.
+    """
+    sender = make_client(AGENT_A, TOKEN_A)
+    recipient = make_client(AGENT_B, TOKEN_B)
+
+    assert await run(main, ["send", IDENT_B, "the handover I need to check"],
+                     client=sender) == 0
+    printed = capsys.readouterr().out
+    task_id = printed.rsplit("(task ", 1)[1].rstrip(")\n")
+
+    assert await run(main, ["read", task_id], client=sender) == 0
+    task = json.loads(capsys.readouterr().out)
+    assert task["artifacts"][0]["parts"][0]["text"] == "the handover I need to check"
+
+    # And the recipient can do the same with the id from their own listing.
+    assert await run(main, ["inbox"], client=recipient) == 0
+    listed = capsys.readouterr().out
+    listed_id = listed.split("[", 1)[1].split("]", 1)[0]
+    assert listed_id == task_id
+    assert await run(main, ["read", listed_id], client=recipient) == 0
+    assert json.loads(capsys.readouterr().out)["id"] == task_id

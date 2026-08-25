@@ -14,7 +14,7 @@ from a2a.types.a2a_pb2 import Message, Part, Role, SendMessageRequest, TaskState
 from a2a_hub.executor import (
     HubAgentExecutor,
     _extract_recipient,
-    _struct_to_dict,
+    struct_to_dict,
     hub_owner_resolver,
 )
 
@@ -84,7 +84,7 @@ def test_owner_resolver_empty_override_falls_back():
 # --- extraction helpers ---------------------------------------------------
 
 def test_struct_to_dict_none():
-    assert _struct_to_dict(None) == {}
+    assert struct_to_dict(None) == {}
 
 
 def test_extract_recipient_from_message():

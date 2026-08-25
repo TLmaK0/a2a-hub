@@ -342,7 +342,12 @@ def format_task(task: dict[str, Any]) -> str:
     status = task.get("status", {})
     state = status.get("state", "?").replace("TASK_STATE_", "")
     when = status.get("timestamp", "")[:19].replace("T", " ")
-    lines = [f"[{task.get('id', '?')[:8]}] {state:<9} {when}".rstrip()]
+    # The WHOLE id, not a readable prefix of it. `GetTask` matches exactly, so an
+    # abbreviated id is one that `read` refuses: measured on a task this session
+    # owned, where the full id returned it and the printed 8-character form answered
+    # `Task not found`. A listing whose ids cannot be fed to the command next to it
+    # is a listing that has to be re-fetched as JSON to be used at all.
+    lines = [f"[{task.get('id', '?')}] {state:<9} {when}".rstrip()]
     for artifact in task.get("artifacts", []):
         sender = artifact.get("metadata", {}).get("sender", "?")
         text = " ".join(
@@ -784,7 +789,10 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
             state = task.get("status", {}).get("state", "?").replace(
                 "TASK_STATE_", ""
             )
-            print(f"-> {recipient}: {state} (task {task.get('id', '?')[:8]})")
+            # Full id: this line is a receipt, and a receipt you cannot present is
+            # not one. `send` handing back a truncated id is half of why a sender
+            # could not re-read their own message.
+            print(f"-> {recipient}: {state} (task {task.get('id', '?')})")
 
         else:
             raise ClientError(f"unknown command: {command}")
