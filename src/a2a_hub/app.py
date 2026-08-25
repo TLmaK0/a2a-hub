@@ -94,8 +94,19 @@ def create_app(settings: Settings) -> Starlette:
         routes=routes,
         middleware=[
             # Outermost: reject oversized bodies before anything reads them.
-            Middleware(MaxBodySizeMiddleware, max_bytes=settings.max_body_bytes),
-            Middleware(BearerAuthMiddleware, registry=registry, seen=agents),
+            # `rpc_path` only shapes the refusal body — a plain `{"error": ...}` on
+            # the JSON-RPC endpoint is unreadable to a conformant client (#48 item 5).
+            Middleware(
+                MaxBodySizeMiddleware,
+                max_bytes=settings.max_body_bytes,
+                rpc_path=settings.rpc_url,
+            ),
+            Middleware(
+                BearerAuthMiddleware,
+                registry=registry,
+                seen=agents,
+                rpc_path=settings.rpc_url,
+            ),
         ],
         lifespan=lifespan,
     )

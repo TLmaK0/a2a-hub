@@ -10,7 +10,7 @@ from starlette.requests import Request
 
 from a2a_hub.app import create_app
 from a2a_hub.auth import RedactingContextBuilder
-from conftest import TOKEN_A, rpc
+from conftest import TOKEN_A, auth, rpc
 
 
 async def test_oversized_body_rejected_413(settings):
@@ -21,7 +21,45 @@ async def test_oversized_body_rejected_413(settings):
     async with httpx.AsyncClient(transport=transport, base_url="https://t") as c:
         r = await rpc(c, "ListTasks", {}, token=TOKEN_A)
         assert r.status_code == 413
+        # On the JSON-RPC endpoint the refusal is a JSON-RPC error object, because a
+        # conformant client parses this body as a JSON-RPC response (#48 item 5).
+        # The guard itself is unchanged: this is the shape, not the check.
+        error = r.json()["error"]
+        assert r.json()["jsonrpc"] == "2.0"
+        assert r.json()["id"] is None
+        assert error["code"] == -32600
+        assert error["data"]["error"] == "payload_too_large"
+    await app.state.engine.dispose()
+
+
+async def test_a_refusal_off_the_jsonrpc_endpoint_keeps_the_plain_shape(settings):
+    """The other half of #48 item 5, and the half that is easy to lose.
+
+    A JSON-RPC envelope is the right shape *because* the caller is speaking JSON-RPC.
+    On `/agents/*` — plain REST, and off the A2A surface entirely — it would be the
+    identical mistake mirrored: a body shaped for a protocol the caller is not using.
+
+    Without this, "make the errors conformant" reads as "wrap every error", which is
+    how a conformance fix turns into a second non-conformance.
+    """
+    tiny = dataclasses.replace(settings, max_body_bytes=10)
+    app = create_app(tiny)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="https://t") as c:
+        r = await c.post(
+            "/agents/register",
+            json={"role": "project", "projects": ["a2a-hub"], "doing": "x" * 100},
+            headers=auth(TOKEN_A),
+        )
+        assert r.status_code == 413
         assert r.json()["error"] == "payload_too_large"
+        assert "jsonrpc" not in r.json()
+
+        # And a session refusal on the same non-JSON-RPC path.
+        r = await c.get("/agents", headers=auth(TOKEN_A, session="bad session"))
+        assert r.status_code == 400
+        assert r.json()["error"] == "invalid_session"
+        assert "jsonrpc" not in r.json()
     await app.state.engine.dispose()
 
 
