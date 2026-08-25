@@ -63,16 +63,26 @@ def build_marks_routes(store, message_marks: MessageMarks) -> list[Route]:
     """Routes for marking a message and for reading marks back.
 
     Args:
-        store: the task store, used **as the authorisation oracle**. If a caller
-            cannot read a task from their own mailbox they may not mark it, and that
-            check is exactly the isolation the store already enforces — reimplementing
-            it here would be a second rule that could disagree with the first.
+        store: the task store, used **as the authorisation oracle** — reimplementing
+            mailbox isolation here would be a second rule that could disagree with
+            the first. It must expose ``get_from_mailbox``: writing a mark asks "is
+            this message yours", which is *not* the same question as ``get``'s "may
+            you read this". They were the same until a sender was allowed to re-read
+            their own send, and then `store.get` started saying yes to the sender —
+            who is exactly who must never write a mark. The oracle moved underneath
+            the rule that trusted it, so the rule now names the question it needs.
         message_marks: mark storage.
     """
 
     async def _readable_task(request: Request, task_id: str):
+        """Anything this caller may read: their own mailbox, or a message they sent."""
         context = _context_builder.build(request)
         return await store.get(task_id, context)
+
+    async def _received_task(request: Request, task_id: str):
+        """Only what was delivered *to* this caller. Marking is the recipient's."""
+        context = _context_builder.build(request)
+        return await store.get_from_mailbox(task_id, context)
 
     async def set_mark(request: Request) -> JSONResponse:
         """Mark a message. Only its recipient may, and the identity is not theirs to choose."""
@@ -97,7 +107,7 @@ def build_marks_routes(store, message_marks: MessageMarks) -> list[Route]:
             )
 
         identity = request.user.username
-        task = await _readable_task(request, task_id)
+        task = await _received_task(request, task_id)
         if task is None:
             # Deliberately the same answer for "no such message" and "not in your
             # mailbox": distinguishing them would tell a caller what exists in

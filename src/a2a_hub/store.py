@@ -127,11 +127,29 @@ class HubTaskStore(DatabaseTaskStore):
         self, task_id: str, context: ServerCallContext
     ) -> a2a_pb2.Task | None:
         """Fetch a task from any mailbox this caller may read, or one they sent."""
+        task = await self.get_from_mailbox(task_id, context)
+        if task is not None:
+            return task
+        return await self._get_as_sender(task_id, context)
+
+    async def get_from_mailbox(
+        self, task_id: str, context: ServerCallContext
+    ) -> a2a_pb2.Task | None:
+        """Fetch a task this caller **owns**, never one they merely sent.
+
+        "May you read this" and "is this yours" used to be the same question, and
+        `get` was a fair answer to both. Since a sender may re-read their own send,
+        it is no longer: `get` is true for someone who is not the recipient. Anything
+        that may only be done **by the recipient** has to ask this one instead.
+
+        Kept here rather than reimplemented by the caller so there is still exactly
+        one copy of the isolation rule — `get` is this plus the sender fallback.
+        """
         for owner in self._read_owners(context):
             task = await super().get(task_id, self._context_for(context, owner))
             if task is not None:
                 return task
-        return await self._get_as_sender(task_id, context)
+        return None
 
     async def _get_as_sender(
         self, task_id: str, context: ServerCallContext
