@@ -148,6 +148,22 @@ async def test_a_stranger_cannot_mark_someone_elses_message(client):
     assert read.json()["marks"] == []
 
 
+async def test_your_own_send_to_yourself_is_still_yours_to_mark(client):
+    """Recipient-only must not become "not the sender", which is a different rule.
+
+    Restricting writes to the mailbox is what stops a sender marking someone else's
+    copy. Expressed the other way round — "refuse whoever sent it" — it would also
+    refuse the one caller who is both, and an agent's own notes to itself are real
+    traffic here. Cheap to assert, and it is the half a narrowing usually breaks.
+    """
+    task_id = await deliver(client, TOKEN_B, AGENT_B, "note to self")
+
+    response = await mark(client, TOKEN_B, task_id, "processed", "acted in sha abc1234")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "processed"
+
+
 async def test_marking_a_message_that_does_not_exist_is_refused(client):
     response = await mark(client, TOKEN_B, "no-such-task", "processed", "ref: nothing")
     assert response.status_code == 404
@@ -197,11 +213,22 @@ async def test_an_unrelated_agent_cannot_read_the_mark(client):
     assert read.json()["error"] == "no_mark_for_you"
 
 
-async def test_reading_a_message_with_no_mark_says_so_without_leaking(client):
+async def test_the_sender_of_an_unmarked_message_is_told_it_is_unmarked(client):
+    """"Nobody has closed this" is an answer, and it is the answer #40 asked for.
+
+    This asserted a 404 until the sender was allowed to re-read their own send. The
+    404 was never the intended contract, it was what fell out of having no readable
+    task and no row: it gave the sender the *same* reply for "not yours" and "nobody
+    has touched it" — the exact conflation this feature exists to end. An empty list
+    distinguishes them, and leaks nothing the sender cannot already fetch with
+    `GetTask` on the id their own send handed back.
+
+    A real stranger still gets 404: `test_an_unrelated_agent_cannot_read_the_mark`.
+    """
     task_id = await deliver(client, TOKEN_A, AGENT_B)
     read = await client.get(f"/messages/{task_id}/mark", headers=auth(TOKEN_A))
-    # Sender, but nothing marked yet: no row names them, so there is nothing to show.
-    assert read.status_code == 404
+    assert read.status_code == 200
+    assert read.json() == {"task_id": task_id, "marks": []}
 
 
 # --- the unprocessed mailbox ------------------------------------------------
