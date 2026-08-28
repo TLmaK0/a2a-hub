@@ -553,6 +553,31 @@ So, before telling anyone a thing exists:
 - and if it is not deployed, say what they can do **today** instead. A fix nobody can reach
   is not yet a fix, and pointing at it wastes their time twice: once trying, once asking.
 
+### The client is RELEASED, not deployed — and it is not the server's problem
+
+Issue #35, decided by Hugo: *"¿qué tiene que ver el cliente con el servidor, por qué se tiene
+que desplegar el cliente? Si acaso compilarlo como mucho y crear una release"*.
+
+So the fix is **not** another step in the window procedure. `git tag v<version> && git push
+origin v<version>` runs `release.yml`: the gate, then
+`.github/scripts/build_client_release.sh`, then a GitHub Release carrying the wheel and
+sdist. A host installs a **version** (`uv tool install <release-wheel-url>`, see `README.md`).
+
+Two consequences worth keeping:
+
+- **A tag builds no image and restarts nothing.** `ci.yml` triggers on `branches: [main]`, so
+  a tag matches neither. The client stopped riding the hub's outage because it never had any
+  business riding it.
+- **Fast-forwarding the shared checkout is no longer how the fleet gets a client.** It was a
+  manual step at the end of a procedure where every other signal already said "done", and it
+  failed silently twice — the server had the feature and the flag "did not exist".
+
+The release script installs the wheel into a throwaway venv and **runs `a2a-client`** there.
+That is not ceremony: dropping the console script from `pyproject.toml` still *builds* a
+perfectly good wheel, and an import that resolves locally because the repo is on `sys.path`
+resolves nowhere in a clean install. Both were reproduced deliberately; only running the
+artifact caught either.
+
 ## A bounded query answers what fits, not what you asked
 
 Every tool here degrades the same way: asked for more than it will give, it returns a
