@@ -12,6 +12,9 @@ import pytest
 
 from conftest import AGENT_A, AGENT_B, IDENT_A, IDENT_B, TOKEN_A, TOKEN_B, auth
 
+from a2a_hub.extensions import A2A_EXTENSIONS_HEADER
+from a2a_hub.routes_marks import MARKS_EXTENSION_URI
+
 
 async def deliver(client, token, recipient, text="please handle this"):
     """Send a message and return the delivered task id."""
@@ -299,6 +302,49 @@ async def test_the_card_announces_the_extension(client):
     assert "https://github.com/TLmaK0/a2a-hub/ext/message-marks/v1" in uris
     # Not required: a client that ignores it keeps working unchanged.
     assert all(e.get("required", False) is False for e in card["capabilities"]["extensions"])
+
+
+# --- #48 item 3, retrofitted: declared but never negotiated, here too ------
+#
+# `echoing` already existed for the register (#48 item 3 / PR #54); this file
+# just never got wrapped in it. Same gap, same fix, no new design.
+
+async def test_activating_the_marks_extension_is_echoed_back(client):
+    task_id = await deliver(client, TOKEN_A, AGENT_B)
+
+    response = await mark(
+        client, TOKEN_B, task_id, "processed", "https://github.com/o/r/issues/1"
+    )
+    echoed = await client.get(
+        "/messages/marks",
+        headers={**auth(TOKEN_B), A2A_EXTENSIONS_HEADER: MARKS_EXTENSION_URI},
+    )
+
+    assert response.status_code == 200
+    assert echoed.headers[A2A_EXTENSIONS_HEADER] == MARKS_EXTENSION_URI
+
+
+async def test_an_unknown_extension_on_marks_is_ignored_and_not_echoed(client):
+    response = await client.get(
+        "/messages/marks",
+        headers={
+            **auth(TOKEN_A),
+            A2A_EXTENSIONS_HEADER: (
+                f"https://example.invalid/ext/made-up/v9, {MARKS_EXTENSION_URI}"
+            ),
+        },
+    )
+
+    assert response.headers[A2A_EXTENSIONS_HEADER] == MARKS_EXTENSION_URI
+    assert "made-up" not in response.headers[A2A_EXTENSIONS_HEADER]
+
+
+async def test_a_client_that_never_heard_of_the_marks_extension_is_unaffected(client):
+    """`required=false` has to mean it, same as the register."""
+    response = await client.get("/messages/marks", headers=auth(TOKEN_A))
+
+    assert response.status_code == 200
+    assert A2A_EXTENSIONS_HEADER not in response.headers
 
 
 # --- per-recipient keying ---------------------------------------------------

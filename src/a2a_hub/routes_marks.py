@@ -23,6 +23,7 @@ from starlette.routing import Route
 
 from a2a.server.routes import DefaultServerCallContextBuilder
 
+from a2a_hub.extensions import echoing
 from a2a_hub.marks import (
     CLOSED_STATES,
     MarkError,
@@ -188,8 +189,13 @@ def build_marks_routes(store, message_marks: MessageMarks) -> list[Route]:
             }
         )
 
+    # Same gap #48 item 3 found in the register, here too: the extension is declared
+    # in the Agent Card but `grep -rn A2A-Extensions` never matched this file, so a
+    # client could never confirm it was using it. `echoing` is the same fix already
+    # applied to the register's routes — it never *requires* the header.
+    supported = (MARKS_EXTENSION_URI,)
     return [
-        Route(MARKS_PATH, list_marks, methods=["GET"]),
-        Route(MARK_PATH, set_mark, methods=["POST"]),
-        Route(MARK_PATH, get_mark, methods=["GET"]),
+        Route(MARKS_PATH, echoing(list_marks, supported), methods=["GET"]),
+        Route(MARK_PATH, echoing(set_mark, supported), methods=["POST"]),
+        Route(MARK_PATH, echoing(get_mark, supported), methods=["GET"]),
     ]
