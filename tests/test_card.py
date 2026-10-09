@@ -5,7 +5,11 @@ from __future__ import annotations
 from google.protobuf.json_format import MessageToDict
 
 from a2a_hub import __version__
+from a2a_hub.auth import SESSION_EXTENSION_URI
 from a2a_hub.card import SECURITY_SCHEME_NAME, build_agent_card
+from a2a_hub.executor import RECIPIENT_EXTENSION_URI
+from a2a_hub.routes_marks import MARKS_EXTENSION_URI
+from a2a_hub.routes_registry import REGISTRY_EXTENSION_URI
 
 
 def test_build_card_basic_fields():
@@ -34,6 +38,29 @@ def test_build_card_declares_bearer():
 def test_build_card_mailbox_skill():
     card = build_agent_card("https://x/")
     assert card.skills[0].id == "mailbox"
+
+
+def test_build_card_declares_every_extension_this_hub_actually_uses():
+    """Both hub-only conventions (recipient routing, the session header) must be
+    declared alongside the two opt-in capabilities (registry, marks) — a plain A2A
+    client reading only this card should learn about all four, not just the ones
+    that happen to have their own HTTP routes.
+    """
+    card = build_agent_card("https://x/")
+    by_uri = {ext.uri: ext for ext in card.capabilities.extensions}
+
+    assert set(by_uri) == {
+        RECIPIENT_EXTENSION_URI,
+        SESSION_EXTENSION_URI,
+        REGISTRY_EXTENSION_URI,
+        MARKS_EXTENSION_URI,
+    }
+
+    # Mandatory to use the hub at all, unlike the two opt-in capabilities below.
+    assert by_uri[RECIPIENT_EXTENSION_URI].required is True
+    assert by_uri[SESSION_EXTENSION_URI].required is True
+    assert by_uri[REGISTRY_EXTENSION_URI].required is False
+    assert by_uri[MARKS_EXTENSION_URI].required is False
 
 
 async def test_card_endpoint(client):

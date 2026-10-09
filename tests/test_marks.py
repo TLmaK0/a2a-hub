@@ -298,10 +298,14 @@ async def test_marks_routes_require_auth(client):
 
 async def test_the_card_announces_the_extension(client):
     card = (await client.get("/.well-known/agent-card.json")).json()
-    uris = [e["uri"] for e in card["capabilities"]["extensions"]]
-    assert "https://github.com/TLmaK0/a2a-hub/ext/message-marks/v1" in uris
-    # Not required: a client that ignores it keeps working unchanged.
-    assert all(e.get("required", False) is False for e in card["capabilities"]["extensions"])
+    extensions = {e["uri"]: e for e in card["capabilities"]["extensions"]}
+    assert "https://github.com/TLmaK0/a2a-hub/ext/message-marks/v1" in extensions
+    # Not required: a client that ignores it keeps working unchanged. (Other
+    # extensions on this same card *are* required — see test_card.py — but that is
+    # a statement about them, not about this one.)
+    assert extensions["https://github.com/TLmaK0/a2a-hub/ext/message-marks/v1"].get(
+        "required", False
+    ) is False
 
 
 # --- #48 item 3, retrofitted: declared but never negotiated, here too ------

@@ -43,6 +43,13 @@ logger = logging.getLogger(__name__)
 #: Metadata key (on the message or the request) holding the recipient agent.
 RECIPIENT_KEY = "recipient"
 
+#: URI announced in the Agent Card: routing a ``SendMessage`` by a ``recipient`` key
+#: in its metadata is a hub convention, not part of the A2A core schema — the spec
+#: has no addressing field of its own. ``required=True`` in the card because this is
+#: not opt-in: a message with no recipient metadata is rejected (see `execute`), so a
+#: client that never learned the convention cannot deliver anything through this hub.
+RECIPIENT_EXTENSION_URI = "https://github.com/TLmaK0/a2a-hub/ext/recipient-routing/v1"
+
 #: Key in ``ServerCallContext.state`` holding the forced owner when saving.
 OWNER_OVERRIDE_KEY = "owner_override"
 

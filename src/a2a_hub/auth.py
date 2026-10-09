@@ -40,6 +40,12 @@ SENSITIVE_HEADERS: frozenset[str] = frozenset({"authorization", "cookie"})
 #: processes can never end up sharing one mailbox by accident.
 SESSION_HEADER = "a2a-session"
 
+#: URI announced in the Agent Card: splitting one token's mailbox into
+#: ``principal/session`` with this header is a hub convention, not part of the A2A
+#: core schema. ``required=True`` because it is mandatory to authenticate (see
+#: `BearerAuthMiddleware`), not an opt-in capability a client can ignore.
+SESSION_EXTENSION_URI = "https://github.com/TLmaK0/a2a-hub/ext/session-identity/v1"
+
 #: Separator between the principal (from the token) and the session name.
 IDENTITY_SEPARATOR = "/"
 

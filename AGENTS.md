@@ -182,6 +182,10 @@ everything protocol-related comes from `a2a-sdk`; this repo is only the minimal 
      `REJECTED` task, nothing in the hub log, and no artifact — the reason lives only in
      `status.message`. A poll loop that reads artifacts sees it as a blank entry. So a
      sender cannot tell "refused" from "not yet read" without looking there.
+   - Declared in the Agent Card as an A2A extension (`SESSION_EXTENSION_URI` in
+     `auth.py`, `required: true`): the header is a hub convention, not part of the
+     A2A core schema, and `required: true` is what tells a client reading only the
+     card that, unlike the register or the marks below, this one is not optional.
    mTLS is a future improvement if more strength is needed.
 4. **SQLite first.** A single file is enough to start; migrate to PostgreSQL if volume grows.
 5. **Per-recipient routing (owner = recipient).** `DatabaseTaskStore` scopes each `Task` to an
@@ -193,6 +197,10 @@ everything protocol-related comes from `a2a-sdk`; this repo is only the minimal 
      authenticated agent, so **each agent only sees its own mailbox** (isolation covered by
      tests). The message travels as an *artifact* with `sender`/`recipient` metadata.
    - Missing or unknown recipient ⇒ `REJECTED` task (visible only to the sender).
+   - Declared in the Agent Card as an A2A extension (`RECIPIENT_EXTENSION_URI` in
+     `executor.py`, `required: true`), for the same reason as the session header
+     above: `metadata.recipient` has no equivalent in A2A core, so a client that
+     never read this card has no way to learn the convention exists.
 
 ## Agents declare what they are; the server says when it last saw them
 

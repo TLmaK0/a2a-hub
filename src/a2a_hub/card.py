@@ -20,6 +20,8 @@ from a2a.types.a2a_pb2 import (
 from a2a.utils import TransportProtocol
 
 from a2a_hub import __version__
+from a2a_hub.auth import SESSION_EXTENSION_URI, SESSION_HEADER
+from a2a_hub.executor import RECIPIENT_EXTENSION_URI, RECIPIENT_KEY
 from a2a_hub.routes_marks import MARKS_EXTENSION_URI
 from a2a_hub.routes_registry import REGISTRY_EXTENSION_URI
 
@@ -55,10 +57,35 @@ def build_agent_card(public_url: str, rpc_url: str = "/") -> AgentCard:
         capabilities=AgentCapabilities(
             streaming=False,
             push_notifications=False,
-            # Announcing the register as an extension is how A2A carries a capability
-            # beyond the core methods, so clients discover it instead of being told.
-            # Not required: a client that ignores it keeps working unchanged.
             extensions=[
+                # Two conventions this hub has always relied on but never declared:
+                # a plain A2A client that only read this card could not tell they
+                # exist. `required=True` because, unlike the two below, these are
+                # not opt-in — using the hub's core methods at all depends on them.
+                AgentExtension(
+                    uri=RECIPIENT_EXTENSION_URI,
+                    description=(
+                        f"SendMessage routes by the {RECIPIENT_KEY!r} key in the "
+                        "message's metadata (e.g. metadata: "
+                        '{"recipient": "agent-b"}); not part of A2A core, which has '
+                        "no addressing field of its own. A message with none is "
+                        "rejected."
+                    ),
+                    required=True,
+                ),
+                AgentExtension(
+                    uri=SESSION_EXTENSION_URI,
+                    description=(
+                        f"Every authenticated request must carry the "
+                        f"{SESSION_HEADER!r} header, giving the token's principal a "
+                        "sub-identity (principal/session) with its own mailbox. "
+                        "Missing or malformed, the request is refused (400)."
+                    ),
+                    required=True,
+                ),
+                # The register and the marks are discoverable, opt-in capabilities
+                # beyond the core methods, so clients find them instead of being
+                # told: a client that ignores either keeps working unchanged.
                 AgentExtension(
                     uri=REGISTRY_EXTENSION_URI,
                     description=(
