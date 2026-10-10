@@ -47,6 +47,18 @@ STATES: frozenset[str] = frozenset({PROCESSED, DISCARDED, AWAITING})
 #: States that take a message out of the unprocessed queue.
 CLOSED_STATES: frozenset[str] = frozenset({PROCESSED, DISCARDED})
 
+#: The instant marking became possible for anyone: the merge of #45. Decided by
+#: Hugo, 2026-10-10 (relayed by the manager), after #40 measured 34 marks on 8725
+#: delivered tasks fleet-wide, all from one project in a day and a half right after
+#: #45 shipped, and zero since. A mailbox opened today carries hundreds of messages
+#: that arrived before marking existed, with no way their recipient could have
+#: closed them — counting those as "unprocessed" makes the queue "all of them or
+#: none", and none is what every mailbox chose. Messages before this instant are
+#: history, not an unmet obligation. Mirrored as a literal in ``client.py`` (which
+#: is stdlib-only and does not import this module); ``test_client.py`` checks the
+#: two stay equal.
+MARKS_AVAILABLE_SINCE = "2026-08-28T12:01:11Z"
+
 #: The detail each state requires, and why it is not optional. A minimum length is a
 #: crude gate and still the difference between "ok" and a sentence somebody had to
 #: read the message to write.

@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from a2a_hub.client import (
+    MARKS_AVAILABLE_SINCE,
     ClientConfig,
     ClientError,
     HubClient,
@@ -1382,6 +1383,56 @@ async def test_cli_marks_a_message_and_hides_it_from_the_unprocessed_inbox(
     assert "close me" in both and "leave me open" in both
     # Ids are printed shortened, so compare on the prefix the listing actually shows.
     assert kept_id[:8] in both and task_id[:8] in both
+
+
+def test_marks_available_since_matches_the_server_constant():
+    """One decision, two files — because the client is stdlib-only and cannot
+
+    import the server's ``marks`` module (which pulls in sqlalchemy). Catches drift
+    if either literal is ever edited without the other.
+    """
+    from a2a_hub.marks import MARKS_AVAILABLE_SINCE as server_cutoff
+
+    assert MARKS_AVAILABLE_SINCE == server_cutoff
+
+
+async def test_cli_unprocessed_hides_history_from_before_marking_existed(
+    make_client, capsys
+):
+    """A message from before #45 shipped is not an unmarked debt; it is hidden too.
+
+    Real timestamps come from the live server (now, in every functional test), so
+    this fakes ``list_all_tasks`` the same way the register-warning test above does
+    — it is the only way to put a pre-cutoff task in front of the CLI at all.
+    """
+    recipient = make_client(AGENT_B, TOKEN_B)
+    before = {
+        "id": "ancient-task",
+        "status": {"state": "TASK_STATE_COMPLETED", "timestamp": "2026-08-01T00:00:00Z"},
+        "artifacts": [],
+    }
+    after = {
+        "id": "recent-task",
+        "status": {"state": "TASK_STATE_COMPLETED", "timestamp": "2026-10-01T00:00:00Z"},
+        "artifacts": [],
+    }
+    recipient.list_all_tasks = lambda *a, **k: {
+        "tasks": [before, after],
+        "totalSize": 2,
+        "pagesRead": 1,
+    }
+
+    assert await run(main, ["inbox", "--unprocessed"], client=recipient) == 0
+    out = capsys.readouterr().out
+    assert "recent-task" in out
+    assert "ancient-task" not in out
+    assert f"1 from before marking existed ({MARKS_AVAILABLE_SINCE})" in out
+
+    assert await run(main, ["inbox", "--unprocessed", "--json"], client=recipient) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["hiddenPreCutoff"] == 1
+    assert payload["hiddenClosed"] == 0
+    assert [t["id"] for t in payload["tasks"]] == ["recent-task"]
 
 
 async def test_cli_awaiting_is_not_hidden_because_it_is_not_closed(make_client, capsys):

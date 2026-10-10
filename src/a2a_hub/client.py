@@ -31,7 +31,8 @@ CLI::
     a2a-client discarded <task-id> <why it needed nothing>
     a2a-client awaiting  <task-id> <the question waiting for a decision>
     a2a-client marks [--json] [--sent]   # what I closed / what happened to mine
-    a2a-client inbox --unprocessed       # hide what I have already closed
+    a2a-client inbox --unprocessed       # hide what I closed, and history from before
+                                          # marking existed (MARKS_AVAILABLE_SINCE)
     a2a-client [--session NAME] ...      # overrides A2A_HUB_SESSION
 """
 
@@ -54,6 +55,13 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "a2a-hub" / "agent.env"
 
 #: Protocol version required by the hub on every JSON-RPC request.
 A2A_VERSION = "1.0"
+
+#: The instant marking became possible for anyone (merge of #45), decided by Hugo as
+#: the retroactivity cut-off for ``inbox --unprocessed``: messages from before this
+#: are history, not an unmarked debt. Mirrors ``a2a_hub.marks.MARKS_AVAILABLE_SINCE``
+#: as a literal because this module is stdlib-only and does not import the server
+#: package; ``test_client.py`` asserts the two stay equal.
+MARKS_AVAILABLE_SINCE = "2026-08-28T12:01:11Z"
 
 #: Callable that performs the HTTP POST and returns the decoded JSON-RPC response.
 Transport = Callable[[str, bytes, dict[str, str]], dict[str, Any]]
@@ -767,11 +775,28 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
                 # it would be the ignoring this feature exists to stop.
                 closed = set(hub.marks().get("closed", []))
                 tasks = result.get("tasks", [])
-                kept = [t for t in tasks if t.get("id") not in closed]
+                kept = []
+                hidden_closed = 0
+                hidden_pre_cutoff = 0
+                for task in tasks:
+                    if task.get("id") in closed:
+                        hidden_closed += 1
+                        continue
+                    # History, not an unmarked debt: this arrived before marking
+                    # existed, so nobody could have closed it. Without this, every
+                    # first run of `--unprocessed` shows hundreds of messages their
+                    # recipient had no way to mark, which is "all of them or none"
+                    # and measurably none is what every mailbox chose.
+                    timestamp = task.get("status", {}).get("timestamp", "")
+                    if timestamp and timestamp < MARKS_AVAILABLE_SINCE:
+                        hidden_pre_cutoff += 1
+                        continue
+                    kept.append(task)
                 result = {
                     **result,
                     "tasks": kept,
-                    "hiddenClosed": len(tasks) - len(kept),
+                    "hiddenClosed": hidden_closed,
+                    "hiddenPreCutoff": hidden_pre_cutoff,
                 }
             if "--json" in args:
                 # Additive keys: a poll loop reads `tasks` and cannot break on these,
@@ -820,6 +845,11 @@ def main(argv: list[str] | None = None, client: HubClient | None = None) -> int:
                         f"{result['hiddenClosed']} already closed by you "
                         "(processed/discarded) and hidden; anything awaiting a "
                         "decision is still shown."
+                    )
+                if result.get("hiddenPreCutoff"):
+                    print(
+                        f"{result['hiddenPreCutoff']} from before marking existed "
+                        f"({MARKS_AVAILABLE_SINCE}) and hidden; nothing to mark there."
                     )
                 for task in result.get("tasks", []):
                     print(format_task(task))
