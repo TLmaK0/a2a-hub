@@ -47,12 +47,16 @@ STATES: frozenset[str] = frozenset({PROCESSED, DISCARDED, AWAITING})
 #: States that take a message out of the unprocessed queue.
 CLOSED_STATES: frozenset[str] = frozenset({PROCESSED, DISCARDED})
 
-#: The instant marking became possible for anyone: the merge of #45. Decided by
-#: Hugo, 2026-10-10 (relayed by the manager), after #40 measured 34 marks on 8725
-#: delivered tasks fleet-wide, all from one project in a day and a half right after
-#: #45 shipped, and zero since. A mailbox opened today carries hundreds of messages
-#: that arrived before marking existed, with no way their recipient could have
-#: closed them — counting those as "unprocessed" makes the queue "all of them or
+#: The instant marking became possible for anyone: the merge of #45. Decided by the
+#: manager of ns3073844, 2026-10-10, after withdrawing the question from Hugo's queue
+#: (it was #202) as internal hygiene — marking is a tool of ours, so who suffers from
+#: nobody using it is us, not him. Proposed by the agent who measured adoption for
+#: #40 (34 marks on 8725 delivered tasks fleet-wide, all from one project in a day
+#: and a half right after #45 shipped, and zero since). **Not Hugo's decision**: if
+#: it turns out wrong, the manager changes it, no need to ask him. A mailbox opened
+#: today carries hundreds of messages that arrived before marking existed, with no
+#: way their recipient could have closed them — counting those as "unprocessed"
+#: makes the queue "all of them or
 #: none", and none is what every mailbox chose. Messages before this instant are
 #: history, not an unmet obligation. Mirrored as a literal in ``client.py`` (which
 #: is stdlib-only and does not import this module); ``test_client.py`` checks the

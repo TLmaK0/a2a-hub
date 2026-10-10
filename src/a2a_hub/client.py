@@ -56,9 +56,12 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "a2a-hub" / "agent.env"
 #: Protocol version required by the hub on every JSON-RPC request.
 A2A_VERSION = "1.0"
 
-#: The instant marking became possible for anyone (merge of #45), decided by Hugo as
-#: the retroactivity cut-off for ``inbox --unprocessed``: messages from before this
-#: are history, not an unmarked debt. Mirrors ``a2a_hub.marks.MARKS_AVAILABLE_SINCE``
+#: The instant marking became possible for anyone (merge of #45), set as the
+#: retroactivity cut-off for ``inbox --unprocessed`` by the manager of ns3073844,
+#: 2026-10-10 — **not Hugo's decision**: he never asked for a cut-off, this was
+#: withdrawn from his queue as internal hygiene and the manager can change it
+#: without asking him if it turns out wrong. Messages from before this are
+#: history, not an unmarked debt. Mirrors ``a2a_hub.marks.MARKS_AVAILABLE_SINCE``
 #: as a literal because this module is stdlib-only and does not import the server
 #: package; ``test_client.py`` asserts the two stay equal.
 MARKS_AVAILABLE_SINCE = "2026-08-28T12:01:11Z"
