@@ -12,6 +12,8 @@ instead of a silent one.
 
 from __future__ import annotations
 
+import importlib
+import importlib.metadata
 import tomllib
 from pathlib import Path
 
@@ -56,3 +58,26 @@ def test_versions_match_rejects_near_misses_that_look_equal():
     assert not versions_match("0.2.0", "0.2")  # dropped patch component
     assert not versions_match("0.2.0", "0.2.0.0")  # extra component
     assert not versions_match("0.2.0", "0.2.0-dev")  # suffix
+
+
+def test_import_survives_when_package_metadata_is_absent(monkeypatch):
+    """The floor this reads from can be missing: a tree on sys.path without going
+    through ``uv sync`` / ``pip install`` (today's Dockerfile always installs, so this
+    does not happen there — but the contract is "import never raises", not "the
+    Dockerfile happens to be fine").
+
+    Removing that floor for real, instead of trusting a try/except exists somewhere, is
+    the only way this branch is ever actually exercised.
+    """
+    original = importlib.metadata.version
+
+    def _raise(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", _raise)
+    try:
+        reloaded = importlib.reload(a2a_hub)
+        assert reloaded.__version__ == "unknown"
+    finally:
+        monkeypatch.setattr(importlib.metadata, "version", original)
+        importlib.reload(a2a_hub)  # restore the real value for the rest of the suite
