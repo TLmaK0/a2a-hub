@@ -14,8 +14,76 @@ env:
   IMAGE: ghcr.io/tlmak0/a2a-hub
 
 jobs:
+  # Decide, from the FILES this event changed, whether it is documentation only.
+  # `[skip ci]` used to stand in for this and it verifies nothing: a commit carrying
+  # three `.md` AND one `.py` with `[skip ci]` lands on main with no lint, no tests
+  # and no coverage having run — and looks green because nothing ran. The owner's
+  # call: that escape hatch must not exist ("pues no debe existir el skip ci"). So
+  # the workflow measures the change instead: a docs-only change skips the build and
+  # the promotion BY ITSELF, and anything else runs everything, so there is no
+  # reason left to write `[skip ci]`.
+  #
+  # WHAT COUNTS AS DOCUMENTATION is `_DOCS` below and nothing else: files ending in
+  # `.md`. Not manifests, not the Dockerfile, not workflows, not code, not tests —
+  # whatever the commit message says. One entry is not obviously right: `README.md`
+  # is documentation by any reading AND an input to the image (the Dockerfile copies
+  # it because pyproject's `readme` needs it). Under the literal rule a README-only
+  # merge does not build, so the running image keeps the previous README text until
+  # something else builds. Same consequence lexboe chose; flagged so it stays a
+  # choice rather than a discovery.
+  #
+  # It FAILS TOWARDS RUNNING: an empty or uncomputable diff classifies as "not docs
+  # only". A false "docs only" lets code onto main with no gates; a false "has code"
+  # wastes a runner. Those prices are not comparable.
+  #
+  # The decision block between the markers is lifted verbatim and exercised by
+  # tests/test_ci_docs_only_guard.py, so what is tested cannot drift from what ships.
+  decide:
+    name: decide whether this change is documentation only
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.verdict.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the diff below needs history beyond the head commit
+      - name: Decide whether this change touches only documentation
+        id: verdict
+        run: |
+          # On a push the diff is against the ref the push replaced
+          # (`github.event.before`), which covers EVERY commit in the push — the
+          # approach lexboe's deploy.yml already uses. On a pull request it is
+          # against the base. A diff that cannot be computed (first push to a ref,
+          # force push whose old head is gone) comes out empty through `|| true`,
+          # and empty is classified below as NOT docs-only: fail towards running.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE_FROM='${{ github.event.pull_request.base.sha }}'
+          else
+            RANGE_FROM='${{ github.event.before }}'
+          fi
+          CHANGED=$(git diff --name-only "$RANGE_FROM" '${{ github.sha }}' 2>/dev/null || true)
+          # --- decision block ---
+          _DOCS='\.md$'
+          docs_only=true
+          [ -z "$CHANGED" ] && docs_only=false
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            printf '%s' "$path" | grep -qE "$_DOCS" || docs_only=false
+          done <<EOF
+          $CHANGED
+          EOF
+          # --- end decision block ---
+          if [ "$docs_only" = 'true' ]; then
+            echo "documentation only — no image to build or promote"
+          else
+            echo "changes something an image is built from — everything runs"
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "$CHANGED" | sed 's/^/  changed: /'
+
   test:
     name: test
+    needs: decide
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -80,8 +148,13 @@ jobs:
       # read-only by design, and pushing code from an untrusted branch into our own
       # registry namespace is not something to do by default. Forks are validated by
       # building without pushing; see the fork note in `publish`.
+      #
+      # And never build for a documentation-only change (`decide` above): no byte an
+      # image is built from moved, so there is nothing new to validate. The tests
+      # above still run — they are cheap and a gate that always runs cannot be
+      # skipped by a misclassification.
       - name: Log in to GHCR
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.decide.outputs.docs_only != 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -93,7 +166,7 @@ jobs:
       # different artifact than the one that passed the gate (base image drift,
       # timestamps, resolved layers) even from identical sources.
       - name: Build and push the validated image
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.decide.outputs.docs_only != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -106,7 +179,7 @@ jobs:
       # On a push to main the artifact already exists from the PR, so rebuilding here
       # would defeat the purpose; this only runs for forks.
       - name: Build image (no push, fork PRs)
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && needs.decide.outputs.docs_only != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -118,7 +191,13 @@ jobs:
   # is bit-for-bit what passed CI.
   publish:
     name: promote validated image
-    needs: [test]
+    # `decide` is named explicitly: on a documentation-only merge this job still
+    # runs, but it promotes NOTHING — it carries the previous digest forward (see
+    # the last steps). Skipping the whole job instead would leave `promoted.json`
+    # naming a sha that is no longer main's head, and the infra repo's hourly bump
+    # refuses to deploy anything whose head it cannot verify: every hour would go
+    # red until the next code merge.
+    needs: [test, decide]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -130,9 +209,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
+        if: needs.decide.outputs.docs_only != 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
+        if: needs.decide.outputs.docs_only != 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -145,6 +226,7 @@ jobs:
       # direct push) and we FAIL rather than quietly rebuild: shipping an unvalidated
       # artifact to shared infrastructure is the failure mode this job exists to stop.
       - name: Find the validated image for this content
+        if: needs.decide.outputs.docs_only != 'true'
         id: find
         run: |
           tree="$(git rev-parse HEAD^{tree})"
@@ -163,6 +245,7 @@ jobs:
       # does not pull, rebuild or re-upload layers, and it does not create a new
       # package version — the production tags simply join the version the PR published.
       - name: Promote it to the production tags
+        if: needs.decide.outputs.docs_only != 'true'
         run: |
           tree="${{ steps.find.outputs.tree }}"
           docker buildx imagetools create \
@@ -177,6 +260,7 @@ jobs:
       # scoped to itself), but this repo is public — so this is what lets the deploy chain
       # resolve the image with no secret at all.
       - name: Record the promoted digest publicly
+        if: needs.decide.outputs.docs_only != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROMOTED_BRANCH: promoted
@@ -185,10 +269,51 @@ jobs:
                       --format '{{.Manifest.Digest}}')"
           .github/scripts/record_promoted.sh "${PROMOTED_BRANCH}" "${GITHUB_SHA}" "${digest}"
 
+      # A documentation-only merge has no new image — the PR deliberately built
+      # none — but `promoted.json` must still name main's head: the infra repo's
+      # hourly bump reads it, requires the recorded sha to BE the head, and goes
+      # red otherwise. So carry the previous digest forward under the new sha. The
+      # claim this records is sound because `decide` measured it: nothing an image
+      # is built from changed, so the image that served the commit this push
+      # replaced serves this one too (minus the new .md text — the README trade
+      # documented on `decide`).
+      #
+      # Guarded: the previous record must name exactly `github.event.before`. If
+      # promotion was already behind main — a direct push whose publish went red —
+      # carrying forward would certify content that never passed the gate, so this
+      # fails red instead, which is the same alarm a direct push raises today.
+      # A missing `promoted` branch fails the fetch, red and loud, for the same
+      # reason.
+      - name: Carry the previous digest forward (documentation-only merge)
+        if: needs.decide.outputs.docs_only == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMOTED_BRANCH: promoted
+        run: |
+          git fetch --depth 1 origin "${PROMOTED_BRANCH}"
+          prev_sha="$(git show FETCH_HEAD:promoted.json | jq -r .sha)"
+          digest="$(git show FETCH_HEAD:promoted.json | jq -r .digest)"
+          if [ "${prev_sha}" != "${{ github.event.before }}" ]; then
+            echo "::error::promoted.json records ${prev_sha}, but this push replaced"\
+                 "${{ github.event.before }}. Promotion is behind main, so there is no"\
+                 "validated image to carry forward for a docs-only merge. Repair the"\
+                 "promotion of the commit behind first (re-run its publish), then"\
+                 "re-run this job."
+            exit 1
+          fi
+          .github/scripts/record_promoted.sh "${PROMOTED_BRANCH}" "${GITHUB_SHA}" "${digest}"
+          echo "carried forward: ${GITHUB_SHA} -> ${digest} (same digest, no build, no deploy)"
+
       # Optional: tell a deployment repo that a new image is available. No-op unless
       # both the INFRA_REPO variable (owner/repo) and the INFRA_DISPATCH_TOKEN secret
       # (a fine-grained PAT with Contents: write on that repo) are configured.
+      #
+      # Not on a documentation-only merge: there is no new image to announce, and the
+      # dispatch path `set image`s a `sha-<commit>` tag that a docs-only merge never
+      # creates. The hourly bump still reconciles — it will find the carried-forward
+      # digest already pinned and apply a no-op, which restarts nothing.
       - name: Notify deployment repo
+        if: needs.decide.outputs.docs_only != 'true'
         env:
           GH_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN }}
           INFRA_REPO: ${{ vars.INFRA_REPO }}
