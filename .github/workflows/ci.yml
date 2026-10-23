@@ -2,7 +2,10 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    # TEMPORARY, exercise only: lets a scratch PR based on this branch trigger CI
+    # so the docs-only positive control can be measured without touching main.
+    # Removed before the delivery PR opens.
+    branches: [main, ci/docs-only-decide]
   push:
     branches: [main]
 
