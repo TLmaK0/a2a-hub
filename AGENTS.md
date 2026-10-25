@@ -137,11 +137,30 @@ a cache nothing else checks) and `uv run pytest` with **coverage ≥ 90%**, enfo
 ## Conventions
 
 - **Everything that lives in the repo is in English** — code, comments, commits, issues,
-  PRs, docs. Spanish is for what does *not* live here: hub messages between agents, and
-  anything written to the owner. His decision, and **it is not retroactive**: nothing old
+  PRs, docs. Spanish is for what does *not* live here: **anything written to the owner.**
+  His decision, and **it is not retroactive**: nothing old
   gets translated, because rewriting a finished conversation breaks its links without fixing
   a defect.
 - Commits with a scope prefix (`feat(server):`, `fix(auth):`, `docs:`), in English.
+
+## One session owns this repo, end to end (2026-10-25)
+
+**This repo is worked by a single session that owns it end to end:** measuring, ordering the
+work, implementing, delivering. There is no separate coordinator to escalate to and no queue to
+hand a measurement to — **the owner is talked to directly.** Any instruction, in this repo or
+inherited from elsewhere, that says to report work to a coordinator, to queue a question for a
+relay, or to wait for a periodic review round, is **obsolete** — decide it here, or say it to the
+owner.
+
+⚠️ **One fact about this project in particular, stated as a fact and not as a plan:** the
+deployed hub's original client was an internal set of agents that coordinated through it, and
+**they no longer work that way.** Whether this repo is kept, repurposed or retired is **the
+owner's call**, not this session's: measure who still calls the deployed hub before proposing
+anything, and do not read this as permission to stop maintaining it.
+
+⛔ **And none of this becomes waiting.** What belongs to the owner — money, credentials,
+deletions, labels, opening issues, visibility changes, production — is not a blocker: say it, and
+carry on with whatever does not depend on it.
 
 ## How work happens here
 
@@ -149,7 +168,10 @@ a cache nothing else checks) and `uv run pytest` with **coverage ≥ 90%**, enfo
 issues are the history. This document holds only what will still be true tomorrow without
 anyone editing it.
 
-Load these skills depending on what you are about to do:
+🔑 **Skills are this house's method, and they are loaded BEFORE acting, not after.** They live
+in `~/.claude/skills` (a link to `management/skills`: one source in git, never copied into this
+repo) and the **superpowers** plugin is active at user level. If there is any chance a skill
+applies to what you are about to do, invoke it first.
 
 | You are about to… | Skill |
 |---|---|
@@ -159,8 +181,11 @@ Load these skills depending on what you are about to do:
 | write tests or fixtures | `bdd-integration-first` |
 | write an assertion, or interpret a green, a zero or a "does not reproduce" | `rules-of-evidence` |
 | open a PR, merge, promote an image, plan a window | `delivering-a-branch` |
+| create, archive or **delete** a repo, a package or an image | `managing-repos` |
+| install anything on this machine, sudo, symlinks, dependencies | `host-tools` |
 | review security, handle a secret, respond to a suspected compromise | `security-review-and-incidents` |
 | write user-visible strings or render a failure | `ui-texts-and-failures` |
+| email, or anything that goes outside | `operator-preferences` |
 
 The history of how each rule here was earned — the token leaks, the broadcast that read as
 four private orders, the runbook a shell executed — is in this file's git history
